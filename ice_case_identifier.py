@@ -55,9 +55,13 @@ class IceLossDetector:
         
     def reference_dataset(self, dataset):
         # these can probaably be hardcoded, esp. if ¨"other_manual" can be set from UI.
-        reference_dataset_mask = (dataset["normal_operation"] == True) & (dataset["faults"] == False) & (dataset["icing_codes"] == False) & \
-                            (dataset["curtailment"] == False) & (dataset["ice_detection"] == False) & (dataset["other_manual"] == False) & \
-                            (dataset["ambient_temperature"] >= self.temperature_filter_level)
+        reference_dataset_mask = (dataset["normal_operation"] == True) &\
+                                (dataset["faults"] == False) & \
+                                (dataset["icing_codes"] == False) & \
+                                (dataset["curtailment"] == False) & \
+                                (dataset["ice_detection"] == False) & \
+                                (dataset["other_manual"] == False) & \
+                                (dataset["ambient_temperature"] >= self.temperature_filter_level)
         reference_dataset = dataset[reference_dataset_mask]
         return reference_dataset
 
@@ -110,11 +114,15 @@ class IceLossDetector:
         dataset['reference_power'] = np.interp(dataset['wind_speed_c'].to_numpy(),w,y)
         
         # Alarm limit need to conver this to (1,0) instead of booleans for the length filter to work.
-        dataset['ice_alarm'] = 1.0*((dataset['output_power']<dataset['p10_ref']) & \
-                                    (dataset['ambient_temperature']<self.icing_alarm_limit) & \
+        dataset['ice_alarm'] = 1.0*((dataset['output_power'] < dataset['p10_ref']) & \
+                                    (dataset['ambient_temperature'] < self.icing_alarm_limit) & \
                                     (dataset['wind_speed'] >= self.minimum_wind_speed) & \
-                                    (dataset["normal_operation"] == True) & (dataset["faults"] == False) & (dataset["icing_codes"] == False) & \
-                                    (dataset["curtailment"] == False) & (dataset["ice_detection"] == False) & (dataset["other_manual"] == False)
+                                    (dataset["normal_operation"] == True) & \
+                                    (dataset["faults"] == False) & \
+                                    (dataset["icing_codes"] == False) & \
+                                    (dataset["curtailment"] == False) & \
+                                    (dataset["ice_detection"] == False) & \
+                                    (dataset["other_manual"] == False)
                                     )
         
         # Identify changes in the 'alarm' column to segment sequences
@@ -140,7 +148,9 @@ class IceLossDetector:
         # ToDo:
         # fix the return column names and datatypes, needs to be boolean
         return dataset
-        
+    
+    
+    
     def detect_icing_events(self):
         """
         run the correct sequence of functions and return the dataframe with icign events
@@ -166,9 +176,11 @@ class IceLossDetector:
 
 if __name__ == '__main__':
     full_data = pd.read_csv("cleaned_file_fake_data2 (other_col_names).csv")
-    ice_det = IceLossDetector(full_data)
+    ice_det = IceLossDetector(full_data) 
     dataset = ice_det.detect_icing_events()
     pc = ice_det.make_power_curve()
+    dataset.to_csv('output.csv')
+    print(pc)
     fig, ax = plt.subplots(nrows=3,ncols=1,sharex=True)
     dataset.plot.line(x='timestamp', y=['output_power','p10_ref','reference_power'],ax=ax[0])
     dataset.plot.line(x='timestamp', y=['ice_alarm','stops'],ax=ax[1])
