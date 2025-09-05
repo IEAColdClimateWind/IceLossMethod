@@ -80,6 +80,7 @@ class IceLossDetector:
         # print(reference_dataset_b)
         # group by bin, calculate bunch of statistics for each bin
         # aggregation functions are listed as ('name of result', function)
+        # ToDo: change P10, P90 to something meaningful
         pc = reference_dataset_b[["wind_speed_c","output_power","bin"]].groupby('bin',observed=False).agg([
             ('mean', 'mean'),
             ('P10', lambda x: x.quantile(self.low_quantile)),
@@ -119,9 +120,9 @@ class IceLossDetector:
                                     (dataset['wind_speed'] >= self.minimum_wind_speed) & \
                                     (dataset["normal_operation"] == True) & \
                                     (dataset["faults"] == False) & \
-                                    (dataset["icing_codes"] == False) & \
+                                    #(dataset["icing_codes"] == False) & \
                                     (dataset["curtailment"] == False) & \
-                                    (dataset["ice_detection"] == False) & \
+                                    #(dataset["ice_detection"] == False) & \
                                     (dataset["other_manual"] == False)
                                     )
         
