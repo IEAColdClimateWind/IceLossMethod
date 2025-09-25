@@ -6,11 +6,16 @@ import matplotlib.pyplot as plt
 
 class IceLossDetector(pd.DataFrame):
     
-    _metadata = ["temperatureCorrectionApplied","parameters"]
+    _metadata = ["temperatureCorrectionApplied","parameters","powerCurve"]
     
     @property
     def _constructor(self):
         return IceLossDetector
+
+    def __finalize__(self, other, method=None):
+        for name in self._metadata:
+            object.__setattr__(self, name, getattr(other, name, None))
+        return self
     
     def __init__(self, *args, **kwargs):
         """
@@ -24,6 +29,7 @@ class IceLossDetector(pd.DataFrame):
         super().__init__(*args, **kwargs)
         
         self.temperatureCorrectionApplied = False
+        self.powerCurve = None
         self.parameters = {}
         # site specifics
         self.parameters['turbine_name'] = 'unnamed turbine'
@@ -50,24 +56,43 @@ class IceLossDetector(pd.DataFrame):
         self.parameters['stop_limit'] = 100
         
     @classmethod
+    def iceLossAnalysis(cls, fileNameData, fileNameConfig, fileNameOutput, computePowerCurve=True):
+        ice_det = cls.importFromCSV(fileNameData)
+        ice_det.addParametersFromJSON(fileNameConfig)
+        if computePowerCurve:
+            ice_det.identifyCleanedDataset()
+            ice_det.makePowerCurve()
+            ice_det.addExpectedPowerToData()
+        ice_det.identifyIceLossPeriods()
+        ice_det.computeIcingLosses()
+        ice_det.to_csv(fileNameOutput)
+        if computePowerCurve:
+            ice_det.plotPowerCurve() #optional
+        ice_det.plotTimeseries()
+
+    @classmethod
     def importFromCSV(cls, fileName):
         """
         Creates a IceLossDetector from a standard csv file generated from the import module
         
         """
         full_data = pd.read_csv(fileName,index_col=0)
+        ice_det = cls.constructFromDataFrame(full_data)
+        return ice_det
+    
+    @classmethod
+    def constructFromDataFrame(cls, df):
         if not np.isin(['timestamp', 'wind_speed', 'ambient_temperature', 'output_power',
                'normal_operation', 'wind_direction', 'pressure', 'maintenance',
                'faults', 'curtailment', 'other_manual', 'icing_codes', 'ice_detection',
                'ips_status'],full_data.columns).all():
-            ImportError('The provided CSV does not contain the required columns of the standard file')
+            ImportError('The provided data does not contain the required columns of the standard file')
             
         ice_det = IceLossDetector(full_data) 
         if not ice_det.isTenMinuteInterval():
             ImportError('Please provide 10-minute data')
         ice_det.retimeToTenMinute()
         return ice_det
-        
     
     def isTenMinuteInterval(self):
         if not isinstance(self.index, pd.DatetimeIndex):
@@ -102,28 +127,24 @@ class IceLossDetector(pd.DataFrame):
         #return new_data
         
         
-    def identifyReferenceDataset(self):
+    def identifyCleanedDataset(self):
         # these can probaably be hardcoded, esp. if ¨"other_manual" can be set from UI.
         reference_dataset_mask = (self["normal_operation"] == True) &\
                                 (self["faults"] == False) & \
                                 (self["curtailment"] == False) & \
                                 (self["other_manual"] == False) & \
                                 (self["ambient_temperature"] >= self.parameters['temperature_filter_level'])
-        #add option to remove ice detection and icing code from dataset
+        #TODO add option to remove ice detection and icing code from dataset
         #(self["icing_codes"] == False) & \
         #(self["ice_detection"] == False) & \
-        self.loc[:,'referenceDatasetMask'] = reference_dataset_mask
-        #reference_dataset = dataset[reference_dataset_mask]
-        #return reference_dataset
-
-    # print(reference_dataset.head())
+        self.loc[:,'cleanedDatasetMask'] = reference_dataset_mask
 
 
     def makePowerCurve(self):
         self.temperatureCorrection()
-        if 'referenceDatasetMask' not in self.columns:
-            self.identifyReferenceDataset()
-        reference_dataset = self.loc[self.loc[:,'referenceDatasetMask'],:]
+        if 'cleanedDatasetMask' not in self.columns:
+            self.identifyCleanedDataset()
+        reference_dataset = self.loc[self.loc[:,'cleanedDatasetMask'],:]
         # this needs to be settable
         wind_bins = pd.interval_range(start=self.parameters['low_wind_bin'], end=self.parameters['high_wind_bin'], freq=self.parameters['wind_bin_size'])
         # create binning for the dataset based on the corrected wind speed
@@ -132,10 +153,8 @@ class IceLossDetector(pd.DataFrame):
         # add bin index for every value in the dataset
         reference_dataset_b = pd.merge(left=reference_dataset, right=binning_r, left_index=True, right_index=True)
 
-        # print(reference_dataset_b)
         # group by bin, calculate bunch of statistics for each bin
         # aggregation functions are listed as ('name of result', function)
-        # ToDo: change P10, P90 to something meaningful
         pc = reference_dataset_b[["wind_speed_c","output_power","bin"]].groupby('bin',observed=False).agg([
             ('mean', 'mean'),
             ('low_quantile', lambda x: x.quantile(self.parameters['low_quantile'])),
@@ -146,31 +165,29 @@ class IceLossDetector(pd.DataFrame):
             ('count', 'count')
         ])
         # print(pc[[('wind_speed_c','mean'),('output_power','mean'),('output_power','P10'),('output_power','P90')]])
-        return pc
-        
-
-    def identifyIceStop(self):
-        # separate the points when the turbine has stopped from the other icing alarms
-        # Stops are events where we have an icing alarm, but the power is below a certain limit. 
-        stop_mask = ((self['ice_alarm'] == 1.0) & (self['output_power'] <= self.parameters['stop_limit']) &\
-                    (self['wind_speed'] >= self.parameters['minimum_wind_speed']))
-        self['stops'] = 1.0*stop_mask
-        #return dataset
-        
-    def addReferencePowerToData(self, pc):
+        self.powerCurve = pc
+    
+    def addExpectedPowerToData(self):
+        if self.powerCurve is None:
+            AttributeError('The power curve has not been computed, please compute it using makePowerCurve()')
+        pc = self.powerCurve
         self.temperatureCorrection()
         # interpoaltion cannot handle NaN
         pc_mask = ~(np.isnan(pc[('wind_speed_c','mean')]))
         # piecewise linear interpolation over the power curves to get the refrence values for alarm creation
         y10 = pc[pc_mask][('output_power','low_quantile')].to_numpy()
+        y90 = pc[pc_mask][('output_power','high_quantile')].to_numpy()
         w = pc[pc_mask][('wind_speed_c','mean')].to_numpy()
         y = pc[pc_mask][('output_power','mean')].to_numpy()
         self['low_quantile_ref'] = np.interp(self['wind_speed_c'].to_numpy(),w,y10)
-        self['reference_power'] = np.interp(self['wind_speed_c'].to_numpy(),w,y)
+        self['high_quantile_ref'] = np.interp(self['wind_speed_c'].to_numpy(),w,y90)
+        self['expected_power'] = np.interp(self['wind_speed_c'].to_numpy(),w,y)
 
-    def powerCurveIceDetection(self):
+    def identifyIceLossPeriods(self):
+        if 'low_quantile_ref' not in self.columns:
+            AttributeError('The low quantile reference power is not computed, please compute it using addExpectedPowerToData()')
         # Alarm limit need to conver this to (1,0) instead of booleans for the length filter to work.
-        self['ice_alarm'] = 1.0*((self['output_power'] < self['low_quantile_ref']) & \
+        self['iceLossMask'] = 1.0*((self['output_power'] < self['low_quantile_ref']) & \
                                     (self['ambient_temperature'] < self.parameters['icing_alarm_limit']) & \
                                     (self['wind_speed'] >= self.parameters['minimum_wind_speed']) & \
                                     (self["normal_operation"] == True) & \
@@ -179,10 +196,10 @@ class IceLossDetector(pd.DataFrame):
                                     (self["curtailment"] == False) & \
                                     #(dataset["ice_detection"] == False) & \
                                     (self["other_manual"] == False)
-                                    )
+                                    ) #TODO change name of column to specify that it is a mask
         
         # Identify changes in the 'alarm' column to segment sequences
-        mask = self['ice_alarm'] != self['ice_alarm'].shift()
+        mask = self['iceLossMask'] != self['iceLossMask'].shift()
         # want group these by event length for length-based filtering
         group = mask.cumsum()
 
@@ -191,48 +208,107 @@ class IceLossDetector(pd.DataFrame):
         # group assigns a unique group ID to each sequence.
         # groupby(group) groups consecutive values.
         # transform replaces each 1 in a group with the length of that group only if the group starts with 1.
-        self['ice_alarm_duration'] = self.groupby(group)['ice_alarm'].transform(lambda x: len(x) if x.iloc[0] == 1 else x)
+        self['ice_alarm_duration'] = self.groupby(group)['iceLossMask'].transform(lambda x: len(x) if x.iloc[0] == 1 else x)
         # time filter, require at least 3 consequtive alarms
         self['ice_alarm_duration'] = self['ice_alarm_duration'].where(self['ice_alarm_duration'] >= self.parameters['alarm_time_limit'], 0)
-        self['ice_alarm'] = self['ice_alarm'].where(self['ice_alarm_duration'] >= self.parameters['alarm_time_limit'], 0)
-        
-        #print(dataset.head())
-        # fig, ax = plt.subplots(nrows=2,ncols=1,sharex=True)
-        # dataset.plot.line(x='timestamp', y=['output_power','p10_ref','reference_power'],ax=ax[0])
-        # dataset.plot.line(x='timestamp', y=['ice_alarm'],ax=ax[1])
-        # plt.show()
-        # ToDo:
+        self['iceLossMask'] = self['iceLossMask'].where(self['ice_alarm_duration'] >= self.parameters['alarm_time_limit'], 0)
+        # TODO:
         # fix the return column names and datatypes, needs to be boolean
-        #return dataset
+        # check what happens with nan values
+        self.identifyIceLossOperational()
+        self.identifyIceLossStandstill()
+
+
+    def identifyIceLossStandstill(self):
+        if 'iceLossMask' not in self.columns:
+            AttributeError('The low quantile reference power is not computed, please compute it using identifyIceLossPeriods()')
+        # separate the points when the turbine has stopped from the other icing alarms
+        # Stops are events where we have an icing alarm, but the power is below a certain limit. 
+        stop_mask = ((self['iceLossMask'] == 1.0) & (self['output_power'] <= self.parameters['stop_limit']) &\
+                    (self['wind_speed'] >= self.parameters['minimum_wind_speed']))
+        self['iceLossStandstillMask'] = 1.0*stop_mask 
+
+    def identifyIceLossOperational(self):
+        if 'iceLossMask' not in self.columns:
+            AttributeError('The low quantile reference power is not computed, please compute it using identifyIceLossPeriods()')
+        # separate the points when the turbine has stopped from the other icing alarms
+        # Stops are events where we have an icing alarm, but the power is below a certain limit. 
+        stop_mask = ((self['iceLossMask'] == 1.0) & ((self['output_power'] > self.parameters['stop_limit']) |\
+                    (self['wind_speed'] < self.parameters['minimum_wind_speed'])))
+        self['iceLossOperationalMask'] = 1.0*stop_mask 
+        
+    def identifyIceLossOverProduction(self):
+        print('TBD')
+
+    def computeIcingLosses(self):
+        if np.isin(['iceLossMask','expected_power'],self.columns).all():
+            AttributeError('The icing periods or the expected power are not computed, please compute it using identifyIceLossPeriods() or addExpectedPowerToData()')
+        self['icingLosses'] = self['iceLossMask'] * (self['expected_power']-self['output_power']) * 10 / 60 #in kWh at each timestamp
     
-    
-    
+    def computeIcingStatistics(self):
+        print('TBD')
+
+    def computeProducedEnergy(self,periodStart=None,periodEnd=None):
+        print('TBD')
+
+    def computeEnergyIcingLosses(self,periodStart=None,periodEnd=None):
+        print('TBD')
+
+    def computeExpectedEnergy(self,periodStart=None,periodEnd=None):
+        print('TBD')
+
+    def computeNumberOfIcingEvents(self,periodStart=None,periodEnd=None):
+        print('TBD')
+
+    def computeAverageEventDuration(self,periodStart=None,periodEnd=None):
+        print('TBD')
+
+    def computeIcingLossesPerClass(self,periodStart=None,periodEnd=None):
+        print('TBD')
+
+    #add as many functions as there are statistics to be computed
+
+    def exportOutputStatistics(self):
+        print('TBD')
+
+    def exportPowerCurveToCSV(self):
+        print('TBD')
+
+    def powerCurveDiagnostic(self):
+        print('TBD')
+
     def computeFullChain(self):
         """
         run the correct sequence of functions and return the dataframe with icign events
         """
         self.temperatureCorrection()
-        self.identifyReferenceDataset()
-        pc = self.makePowerCurve()
-        self.addReferencePowerToData(pc)
-        self.powerCurveIceDetection()
-        self.identifyIceStop()
+        self.identifyCleanedDataset()
+        self.makePowerCurve() #find a way to manually add a power curve, you can skip this step if you have reference power low and high quantile
+        self.addExpectedPowerToData()
+        self.identifyIceLossPeriods()
+        self.computeIcingLosses()
         #return icing_data
 
-    def plotPowerCurve(self,pc):
+    def plotPowerCurve(self): #TODO add option to add IPS activation and ice detection, add garnish to this function, print to file?
+        if self.powerCurve is None:
+            AttributeError('The power curve has not been computed, please compute it using makePowerCurve()')
+        pc = self.powerCurve
         pc.plot(x=('wind_speed_c','mean'), y=[('output_power','mean'),('output_power','low_quantile'),('output_power','high_quantile')])
         ax2 = plt.gca()
         self.plot.scatter(x="wind_speed_c",y='output_power',color='gray',alpha=0.1, ax=ax2)
-        self[self['ice_alarm'] == 1].plot.scatter(x="wind_speed_c",y='output_power',color='red',alpha=0.1, ax=ax2)
+        self[self['iceLossMask'] == 1].plot.scatter(x="wind_speed_c",y='output_power',color='red',alpha=0.1, ax=ax2)
         plt.show()
         
     def plotTimeseries(self):
         fig, ax = plt.subplots(nrows=3,ncols=1,sharex=True)
-        self.plot.line(y=['output_power','low_quantile_ref','reference_power'],ax=ax[0]) #x=index
-        self.plot.line(y=['ice_alarm','stops'],ax=ax[1])
+        self.plot.line(y=['output_power','low_quantile_ref','high_quantile_ref','expected_power'],ax=ax[0]) #x=index
+        self.plot.line(y=['iceLossOperationalMask','iceLossStandstillMask'],ax=ax[1])
         self.plot.line(y='wind_speed', ax=ax[2])
         self.plot.line(y='ambient_temperature', ax=ax[2], secondary_y=True)
         plt.show()
+
+    def addPowerCurveFromCSV(self,fileName):
+        print('TBD')
 
     def addParametersFromJSON(self,fileName):
         #TODO 
@@ -306,14 +382,27 @@ class IceLossDetector(pd.DataFrame):
 
 if __name__ == '__main__':
     #possible to add a loop here from the new values of the json file to do an entire wind farm
-    ice_det = IceLossDetector.importFromCSV("cleaned_file_fake_data2 (other_col_names).csv")
+    #make a constructor for dataframes
+    #TODO option to make it year by year, it can be for power curve generation, but also for results (add option to have an annual thing), add option for calendar year or winters (flexible parameter, Jul, Jan, Aug, Sept)
+    ice_det = IceLossDetector.importFromCSV("cleaned_file_fake_data2 (other_col_names).csv") #have a constructor that does the whole thing
     ice_det.addParametersFromJSON('settings_fake_data2 (other_col_names).json')
-    ice_det.identifyReferenceDataset()
-    pc = ice_det.makePowerCurve()
-    ice_det.addReferencePowerToData(pc)
-    ice_det.powerCurveIceDetection()
-    ice_det.identifyIceStop()
+    ice_det.identifyCleanedDataset() #options to activate those functions or not
+    ice_det.makePowerCurve()
+    ice_det.addExpectedPowerToData()
+    ice_det.identifyIceLossPeriods()
+    ice_det.computeIcingLosses()
+    #TODO add method compute losses: add column with losses in kWh for each timestamp
+    #TODO add method compute statistics actual energy production, expected and losses, number of events, average duration, losses per category, start from timo's previous version, no start from scracth
+    #TODO add method to evaluate power curve, stats and figures, diagnostic
+    # can be formatted into a dictionnary
     ice_det.to_csv('output.csv')
-    print(pc)
-    ice_det.plotPowerCurve(pc)
+    ice_det.plotPowerCurve() #optional
     ice_det.plotTimeseries()
+
+    #workflow would be like this
+    #jsonFile = 'config.json'
+    #turbineTable, generalConfigs = parseConfig(jsonFile)
+    #for index, row in turbineTable.iterrows():
+    #   print(f'Analysis for {index}')
+    #   dataFile = row['fileName']
+    #   IceLossDetector.iceLossAnalysis(fileNameData=dataFile, fileNameConfig=jsonFile, fileNameOutput=f'output_{index}.csv', computePowerCurve=True)
