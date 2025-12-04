@@ -459,7 +459,7 @@ class IceLossDetector(pd.DataFrame):
         self.statistics["icing_stop_share"] = float(np.round(self.statistics["icing_stop_loss"] / self.statistics["total_expected_production"],2))
         
         # other status variables again, cant count form timestamps so number of hours is number of lines * 1/6:
-        # maintenance	faults	curtailment	other_manual	icing_codes	ice_detection	ips_status	referenceDatasetMask
+        # maintenance	faults	curtailment	other_manual	icing_codes	ice_detection	ips_status	cleanedDatasetMask
         self.statistics["maintenance_hours"] = float(np.round((1/6)*len(self[self["maintenance"]==True]),0))
         self.statistics["faults_hours"] = float(np.round((1/6)*len(self[self["faults"]==True]),0))
         self.statistics["curtailment_hours"] = float(np.round((1/6)*len(self[self["curtailment"]==True]),0))
@@ -467,7 +467,7 @@ class IceLossDetector(pd.DataFrame):
         self.statistics["icing_codes_hours"] = float(np.round((1/6)*len(self[self["icing_codes"]==True]),0))
         self.statistics["ice_detection_hours"] = float(np.round((1/6)*len(self[self["ice_detection"]==True]),0))
         self.statistics["ips_status_hours"] = float(np.round((1/6)*len(self[self["ips_status"]==True]),0))
-        self.statistics["reference_hours"] = float(np.round((1/6)*len(self[self["referenceDatasetMask"]==True]),0))
+        self.statistics["reference_hours"] = float(np.round((1/6)*len(self[self["cleanedDatasetMask"]==True]),0))
         
         
         
