@@ -83,13 +83,14 @@ class IceLossDetector(pd.DataFrame):
     
     @classmethod
     def constructFromDataFrame(cls, df):
+        
         if not np.isin(['timestamp', 'wind_speed', 'ambient_temperature', 'output_power',
                'normal_operation', 'wind_direction', 'pressure', 'maintenance',
                'faults', 'curtailment', 'other_manual', 'icing_codes', 'ice_detection',
-               'ips_status'],full_data.columns).all():
+               'ips_status'],df.columns).all():
             ImportError('The provided data does not contain the required columns of the standard file')
             
-        ice_det = IceLossDetector(full_data) 
+        ice_det = IceLossDetector(df) 
         if not ice_det.isTenMinuteInterval():
             ImportError('Please provide 10-minute data')
         ice_det.retimeToTenMinute()
@@ -191,7 +192,7 @@ class IceLossDetector(pd.DataFrame):
         pc = self.powerCurve
         self.temperatureCorrection()
         # interpoaltion cannot handle NaN
-        pc_mask = ~(np.isnan(pc[('wind_speed_mean')]))
+        pc_mask = ~(np.isnan(pc[('wind_speed_c','mean')]))
         # piecewise linear interpolation over the power curves to get the refrence values for alarm creation
         y10 = pc[pc_mask][('output_power','low_quantile')].to_numpy()
         y90 = pc[pc_mask][('output_power','high_quantile')].to_numpy()
@@ -230,7 +231,7 @@ class IceLossDetector(pd.DataFrame):
         # time filter, require at least 3 consequtive alarms
         self['ice_alarm_duration'] = self['ice_alarm_duration'].where(self['ice_alarm_duration'] >= self.parameters['alarm_time_limit'], 0)
         self['iceLossMask'] = self['iceLossMask'].where(self['ice_alarm_duration'] >= self.parameters['alarm_time_limit'], 0)
-        self['power_deficit'] = (self['reference_power'] - self['output_power'])
+        self['power_deficit'] = (self['expected_power'] - self['output_power'])
         self['production_loss'] = self['power_deficit']/6 # loss in kw * duration of loss (10 minutes) loss in kWh
         #Dataframe with the original input data with additional columns
         #    o    Ice detection, different event classes as separate columns
@@ -442,20 +443,20 @@ class IceLossDetector(pd.DataFrame):
         self.statistics["icing_stop_duration"] = float(np.round((1/6)*len(stops_events),0))
         #icing share is often interesting since its in the ice class.
         self.statistics["total_icing_share"] = float(np.round(len(icing_events) / len(self.index) * 100,2))
-        self.statistics["reduced_production_share"] = float(np.round(len(reduced_prod_events) / len(self.index) * 100,2))
-        self.statistics["icing_stop_share"] = float(np.round(len(stops_events) / len(self.index) * 100,2))
+        self.statistics["reduced_production_share"] = float(np.round(len(reduced_prod_events) / len(self.index) * 100, 2))
+        self.statistics["icing_stop_share"] = float(np.round(len(stops_events) / len(self.index) * 100, 2))
         
         self.statistics["total_production"] = float(np.round((self['output_power']/6).sum(),0))
-        self.statistics["total_reference_production"] = float(np.round((self['reference_power']/6).sum(),0))
+        self.statistics["total_expected_production"] = float(np.round((self['expected_power']/6).sum(),0))
         self.statistics["total_losses"] = float(np.round(self['production_loss'].sum(),0))
              # total losses in kWh
         self.statistics["total_icing_loss"] = float(np.round(icing_events["production_loss"].sum(),0))
         self.statistics["reduced_production_loss"] = float(np.round(reduced_prod_events["production_loss"].sum(),0))
         self.statistics["icing_stop_loss"] = float(np.round(stops_events["production_loss"].sum(),0))
         # losses in % of AEP
-        self.statistics["total_icing_share"] = float(np.round(self.statistics["total_icing_loss"] / self.statistics["total_reference_production"],2))
-        self.statistics["reduced_producion_share"] = float(np.round(self.statistics["reduced_production_loss"] / self.statistics["total_reference_production"],2))
-        self.statistics["icing_stop_share"] = float(np.round(self.statistics["icing_stop_loss"] / self.statistics["total_reference_production"],2))
+        self.statistics["total_icing_share"] = float(np.round(self.statistics["total_icing_loss"] / self.statistics["total_expected_production"],2))
+        self.statistics["reduced_producion_share"] = float(np.round(self.statistics["reduced_production_loss"] / self.statistics["total_expected_production"],2))
+        self.statistics["icing_stop_share"] = float(np.round(self.statistics["icing_stop_loss"] / self.statistics["total_expected_production"],2))
         
         # other status variables again, cant count form timestamps so number of hours is number of lines * 1/6:
         # maintenance	faults	curtailment	other_manual	icing_codes	ice_detection	ips_status	referenceDatasetMask
