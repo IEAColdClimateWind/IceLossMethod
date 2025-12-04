@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 class IceLossDetector(pd.DataFrame):
     
-    _metadata = ["temperatureCorrectionApplied","parameters","powerCurve"]
+    _metadata = ["temperatureCorrectionApplied","parameters","powerCurve","statistics"]
     
     @property
     def _constructor(self):
@@ -31,6 +31,7 @@ class IceLossDetector(pd.DataFrame):
         self.temperatureCorrectionApplied = False
         self.powerCurve = None
         self.parameters = {}
+        self.statistics = {}
         # site specifics
         self.parameters['turbine_name'] = 'unnamed turbine'
         self.parameters['rated_power'] = None #somewhere else in the code, when making the power curve check if None and replace value with max from PC
@@ -141,6 +142,16 @@ class IceLossDetector(pd.DataFrame):
 
 
     def makePowerCurve(self):
+        """
+        ·         Power curve used to detect icing
+
+                        o    Includes the limits (P10, P90)
+
+                        o    Also sample count per bin
+
+                        o    Some kind of diagnostic of the quality of the power curve (To be implemented)
+
+        """
         self.temperatureCorrection()
         if 'cleanedDatasetMask' not in self.columns:
             self.identifyCleanedDataset()
@@ -148,7 +159,7 @@ class IceLossDetector(pd.DataFrame):
         # this needs to be settable
         wind_bins = pd.interval_range(start=self.parameters['low_wind_bin'], end=self.parameters['high_wind_bin'], freq=self.parameters['wind_bin_size'])
         # create binning for the dataset based on the corrected wind speed
-        binning = pd.cut(reference_dataset['wind_speed_c'],wind_bins)
+        binning = pd.cut(reference_dataset['wind_speed_c'],bins=wind_bins)
         binning_r = binning.rename("bin")
         # add bin index for every value in the dataset
         reference_dataset_b = pd.merge(left=reference_dataset, right=binning_r, left_index=True, right_index=True)
@@ -166,6 +177,13 @@ class IceLossDetector(pd.DataFrame):
         ])
         # print(pc[[('wind_speed_c','mean'),('output_power','mean'),('output_power','P10'),('output_power','P90')]])
         self.powerCurve = pc
+        #pc.rename(columns = {"wind_speed_c":"wind_speed"},inplace=True)
+        #pc_subset = pc[[('wind_speed','mean'),('output_power','mean'),('output_power','low_quantile'),('output_power','high_quantile'),('output_power','count')]]
+        
+        # Flatten MultiIndex columns to make refrencing make more sense
+        #pc_subset.columns = ['{}_{}'.format(col[0], col[1]) for col in pc_subset.columns]
+        # print(pc_subset)
+        #return pc_subset
     
     def addExpectedPowerToData(self):
         if self.powerCurve is None:
@@ -173,7 +191,7 @@ class IceLossDetector(pd.DataFrame):
         pc = self.powerCurve
         self.temperatureCorrection()
         # interpoaltion cannot handle NaN
-        pc_mask = ~(np.isnan(pc[('wind_speed_c','mean')]))
+        pc_mask = ~(np.isnan(pc[('wind_speed_mean')]))
         # piecewise linear interpolation over the power curves to get the refrence values for alarm creation
         y10 = pc[pc_mask][('output_power','low_quantile')].to_numpy()
         y90 = pc[pc_mask][('output_power','high_quantile')].to_numpy()
@@ -212,7 +230,20 @@ class IceLossDetector(pd.DataFrame):
         # time filter, require at least 3 consequtive alarms
         self['ice_alarm_duration'] = self['ice_alarm_duration'].where(self['ice_alarm_duration'] >= self.parameters['alarm_time_limit'], 0)
         self['iceLossMask'] = self['iceLossMask'].where(self['ice_alarm_duration'] >= self.parameters['alarm_time_limit'], 0)
-        # TODO:
+        self['power_deficit'] = (self['reference_power'] - self['output_power'])
+        self['production_loss'] = self['power_deficit']/6 # loss in kw * duration of loss (10 minutes) loss in kWh
+        #Dataframe with the original input data with additional columns
+        #    o    Ice detection, different event classes as separate columns
+        #    o    Reference power
+        #    o    Ice alarm duration?
+        #    o    Icing losses at each timestamp
+        
+        #print(dataset.head())
+        # fig, ax = plt.subplots(nrows=2,ncols=1,sharex=True)
+        # dataset.plot.line(x='timestamp', y=['output_power','p10_ref','reference_power'],ax=ax[0])
+        # dataset.plot.line(x='timestamp', y=['ice_alarm'],ax=ax[1])
+        # plt.show()
+        # ToDo:
         # fix the return column names and datatypes, needs to be boolean
         # check what happens with nan values
         self.identifyIceLossOperational()
@@ -233,9 +264,9 @@ class IceLossDetector(pd.DataFrame):
             AttributeError('The low quantile reference power is not computed, please compute it using identifyIceLossPeriods()')
         # separate the points when the turbine has stopped from the other icing alarms
         # Stops are events where we have an icing alarm, but the power is below a certain limit. 
-        stop_mask = ((self['iceLossMask'] == 1.0) & ((self['output_power'] > self.parameters['stop_limit']) |\
+        running_mask = ((self['iceLossMask'] == 1.0) & ((self['output_power'] > self.parameters['stop_limit']) |\
                     (self['wind_speed'] < self.parameters['minimum_wind_speed'])))
-        self['iceLossOperationalMask'] = 1.0*stop_mask 
+        self['iceLossOperationalMask'] = 1.0*running_mask 
         
     def identifyIceLossOverProduction(self):
         print('TBD')
@@ -379,6 +410,72 @@ class IceLossDetector(pd.DataFrame):
             self.parameters['minimum_wind_speed'] = minimum_wind_speed
         if stop_limit is not None:
             self.parameters['stop_limit'] = stop_limit
+            
+    def print_power_curve(self, pc):
+        pc.to_csv(f"{self.parameters['turbine_name']}_pc.csv")
+        
+    def make_statistics(self):
+        """
+        Statistics of production:
+          o    Icing hours / icing as % of year
+                 §  Total and per class
+          o    Icing losses
+                 §  Total and per icing class
+          o    Statistics on availability, data coverage etc.
+          o    Total energy produced, expected and loss (icing, faults/maintenance, during icing detection, during IPS activation)
+          o    Time in each category (icing, faults/maintenance, during icing detection, during IPS activation)
+          o    Same but in Dollars or euros (To be implemented)
+          o    Number of icing events
+        """
+        
+        # separate the icing events
+        reduced_prod_events = self[self['iceLossMask'] == 1]
+        stops_events = self[self['iceLossStandstillMask'] == 1]
+        icing_events = pd.concat((reduced_prod_events, stops_events))
+        
+        # total dataset length in hours§
+        self.statistics["total_data_hours"] = float(np.round((self.index.max() - self.index.min()).total_seconds() /60 /60 ,0))
+        
+        # these are not continuous cant count from timestamps
+        self.statistics["total_icing_duration"] = float(np.round((1/6)*len(icing_events),0)) # number of lines * 10 minutes / 60 minutes = total hours
+        self.statistics["reduced_production_duration"] = float(np.round((1/6)*len(reduced_prod_events),0))
+        self.statistics["icing_stop_duration"] = float(np.round((1/6)*len(stops_events),0))
+        #icing share is often interesting since its in the ice class.
+        self.statistics["total_icing_share"] = float(np.round(len(icing_events) / len(self.index) * 100,2))
+        self.statistics["reduced_production_share"] = float(np.round(len(reduced_prod_events) / len(self.index) * 100,2))
+        self.statistics["icing_stop_share"] = float(np.round(len(stops_events) / len(self.index) * 100,2))
+        
+        self.statistics["total_production"] = float(np.round((self['output_power']/6).sum(),0))
+        self.statistics["total_reference_production"] = float(np.round((self['reference_power']/6).sum(),0))
+        self.statistics["total_losses"] = float(np.round(self['production_loss'].sum(),0))
+             # total losses in kWh
+        self.statistics["total_icing_loss"] = float(np.round(icing_events["production_loss"].sum(),0))
+        self.statistics["reduced_production_loss"] = float(np.round(reduced_prod_events["production_loss"].sum(),0))
+        self.statistics["icing_stop_loss"] = float(np.round(stops_events["production_loss"].sum(),0))
+        # losses in % of AEP
+        self.statistics["total_icing_share"] = float(np.round(self.statistics["total_icing_loss"] / self.statistics["total_reference_production"],2))
+        self.statistics["reduced_producion_share"] = float(np.round(self.statistics["reduced_production_loss"] / self.statistics["total_reference_production"],2))
+        self.statistics["icing_stop_share"] = float(np.round(self.statistics["icing_stop_loss"] / self.statistics["total_reference_production"],2))
+        
+        # other status variables again, cant count form timestamps so number of hours is number of lines * 1/6:
+        # maintenance	faults	curtailment	other_manual	icing_codes	ice_detection	ips_status	referenceDatasetMask
+        self.statistics["maintenance_hours"] = float(np.round((1/6)*len(self[self["maintenance"]==True]),0))
+        self.statistics["faults_hours"] = float(np.round((1/6)*len(self[self["faults"]==True]),0))
+        self.statistics["curtailment_hours"] = float(np.round((1/6)*len(self[self["curtailment"]==True]),0))
+        self.statistics["other_manual_hours"] = float(np.round((1/6)*len(self[self["other_manual"]==True]),0))
+        self.statistics["icing_codes_hours"] = float(np.round((1/6)*len(self[self["icing_codes"]==True]),0))
+        self.statistics["ice_detection_hours"] = float(np.round((1/6)*len(self[self["ice_detection"]==True]),0))
+        self.statistics["ips_status_hours"] = float(np.round((1/6)*len(self[self["ips_status"]==True]),0))
+        self.statistics["reference_hours"] = float(np.round((1/6)*len(self[self["referenceDatasetMask"]==True]),0))
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
 if __name__ == '__main__':
     #possible to add a loop here from the new values of the json file to do an entire wind farm
@@ -398,6 +495,9 @@ if __name__ == '__main__':
     ice_det.to_csv('output.csv')
     ice_det.plotPowerCurve() #optional
     ice_det.plotTimeseries()
+    
+    ice_det.make_statistics()
+    print(ice_det.statistics)
 
     #workflow would be like this
     #jsonFile = 'config.json'
