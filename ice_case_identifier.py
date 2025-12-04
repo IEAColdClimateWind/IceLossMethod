@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import json
 # for testing
+from pathlib import Path
 import matplotlib.pyplot as plt
 
 class IceLossDetector(pd.DataFrame):
@@ -81,6 +82,8 @@ class IceLossDetector(pd.DataFrame):
         ice_det = cls.constructFromDataFrame(full_data)
         return ice_det
     
+    
+    
     @classmethod
     def constructFromDataFrame(cls, df):
         
@@ -88,11 +91,11 @@ class IceLossDetector(pd.DataFrame):
                'normal_operation', 'wind_direction', 'pressure', 'maintenance',
                'faults', 'curtailment', 'other_manual', 'icing_codes', 'ice_detection',
                'ips_status'],df.columns).all():
-            ImportError('The provided data does not contain the required columns of the standard file')
+            raise ImportError('The provided data does not contain the required columns of the standard file')
             
         ice_det = IceLossDetector(df) 
         if not ice_det.isTenMinuteInterval():
-            ImportError('Please provide 10-minute data')
+            raise ImportError('Please provide 10-minute data')
         ice_det.retimeToTenMinute()
         return ice_det
     
@@ -319,6 +322,8 @@ class IceLossDetector(pd.DataFrame):
         self.addExpectedPowerToData()
         self.identifyIceLossPeriods()
         self.computeIcingLosses()
+
+        self.make_statistics()
         #return icing_data
 
     def plotPowerCurve(self): #TODO add option to add IPS activation and ice detection, add garnish to this function, print to file?
@@ -342,47 +347,57 @@ class IceLossDetector(pd.DataFrame):
     def addPowerCurveFromCSV(self,fileName):
         print('TBD')
 
-    def addParametersFromJSON(self,fileName):
+    def addParametersFromJSON(self, json_fname, turbine_name):
         #TODO 
         #check for validity
         #adapt variable names
         #add missing variables to json
         #adapt to the change in the json for multiple turbines
         try:
-            with open(fileName, 'r') as file:
+            with open(json_fname, 'r') as file:
                 data = json.load(file)
-            #print(data)
-            #print(type(data))
+        
         except FileNotFoundError:
             print("Error: The file 'data.json' was not found.")
         except json.JSONDecodeError:
             print("Error: Could not decode JSON from the file. Check for valid JSON syntax.")
+
         
-        #Might be changed with micheal change of the json format
-        self.parameters['turbine_name'] = data['turbine_info']['name']
-        self.parameters['rated_power'] = data['turbine_info']['rated_power_kW']
-        self.parameters['hub_height'] = data['turbine_info']['hub_height_m']
-        self.parameters['elevation'] = pd.to_numeric(data['turbine_info']['elevation_m'],errors='coerce')
-        if np.isnan(self.parameters['elevation']):
-            self.parameters['elevation'] = 100
+        # for turbine_info in data['turbines_info']:
+        #     if turbine_info['Turbine Name'] == turbine_name:
+        #         break
+
+        try:
+            turbine_info = [b for b in data.get("turbines_info", []) if "Turbine Name" in b and turbine_name in b["Turbine Name"]][0]
+
+            #Might be changed with micheal change of the json format
+            self.parameters['turbine_name'] = turbine_info['Filename']
+            self.parameters['rated_power'] = turbine_info['Turbine Name']
+            self.parameters['hub_height'] = turbine_info['Rated Power [MW]']
+            self.parameters['elevation'] = pd.to_numeric(turbine_info['Elevation [m]'],errors='coerce')
+            if np.isnan(self.parameters['elevation']):
+                self.parameters['elevation'] = 100
+                
+            #change the json syntax to mach the parameter names
+            self.parameters['low_wind_bin'] = data['power_curve_options']['binning']['min']
+            self.parameters['high_wind_bin']= data['power_curve_options']['binning']['max']
+            self.parameters['wind_bin_size'] = data['power_curve_options']['binning']['step']
             
-        #change the json syntax to mach the parameter names
-        self.parameters['low_wind_bin'] = data['power_curve_options']['binning']['min']
-        self.parameters['high_wind_bin']= data['power_curve_options']['binning']['max']
-        self.parameters['wind_bin_size'] = data['power_curve_options']['binning']['step']
-        
-        # power curve limits
-        self.parameters['low_quantile'] = data['power_curve_options']['lower_limit_percent']/100
-        self.parameters['high_quantile'] = data['power_curve_options']['upper_limit_percent']/100
-        
-        # temperature limits
-        self.parameters['temperature_filter_level'] = data['power_curve_options']['temperature_threshold_C']
-        self.parameters['icing_alarm_limit'] = 1 #To Be added
-        
-        # other limits
-        self.parameters['alarm_time_limit'] = 3 #To Be added
-        self.parameters['minimum_wind_speed'] = 3 #To Be added, give clearer name
-        self.parameters['stop_limit'] = 100 #To Be added, give clearer name
+            # power curve limits
+            self.parameters['low_quantile'] = data['power_curve_options']['lower_limit_percent']/100
+            self.parameters['high_quantile'] = data['power_curve_options']['upper_limit_percent']/100
+            
+            # temperature limits
+            self.parameters['temperature_filter_level'] = data['power_curve_options']['temperature_threshold_C']
+            self.parameters['icing_alarm_limit'] = 1 #To Be added
+            
+            # other limits
+            self.parameters['alarm_time_limit'] = 3 #To Be added
+            self.parameters['minimum_wind_speed'] = 3 #To Be added, give clearer name
+            self.parameters['stop_limit'] = 100 #To Be added, give clearer name
+
+        except:
+            raise ImportError(f'The turbine name {turbine_name} does not exist in the JSON {json_fname}')
         
     def addParametersManually(self,low_wind_bin=None,high_wind_bin=None,wind_bin_size=None,low_quantile=None,high_quantile=None,temperature_filter_level=None,icing_alarm_limit=None,alarm_time_limit=None,minimum_wind_speed=None,stop_limit=None):
         if low_wind_bin is not None:
@@ -469,16 +484,53 @@ class IceLossDetector(pd.DataFrame):
         self.statistics["ips_status_hours"] = float(np.round((1/6)*len(self[self["ips_status"]==True]),0))
         self.statistics["reference_hours"] = float(np.round((1/6)*len(self[self["cleanedDatasetMask"]==True]),0))
         
+
+
+    @staticmethod
+    def compute_farm_from_json(json_fname):
+        """
+        Creates a IceLossDetector from a standard csv file generated from the import module
+        
+        """
+
+        farm_statistics_dict = {}
+        # TODO: better handle parent directory that has all the CSV
+       
+        with open(json_fname, 'r') as file:
+            json_settings = json.load(file)
+
+        list_of_turbines = json_settings['turbines_info']
+
+        for turbine_info in list_of_turbines:
+            turbine_name = turbine_info['Turbine Name']
+            csv_fname = turbine_info['Filename']
+
+            ice_det = IceLossDetector.importFromCSV(Path('app') / 'data' / csv_fname)
+            ice_det.addParametersFromJSON(json_fname, turbine_name)
+            ice_det.computeFullChain()
+
+            farm_statistics_dict[csv_fname] = ice_det.statistics
+
+        return farm_statistics_dict
+
         
         
         
-        
+if __name__ == '__main__':
+
+    json_path_name = Path('app') / 'data'  / 'settings_fake_data2.csv (26).json'
+
+
+    farm_stats = IceLossDetector.compute_farm_from_json(json_path_name)
+    print(farm_stats)
+
+    
         
         
         
         
 
-if __name__ == '__main__':
+if __name__ == '__main__2':
     #possible to add a loop here from the new values of the json file to do an entire wind farm
     #make a constructor for dataframes
     #TODO option to make it year by year, it can be for power curve generation, but also for results (add option to have an annual thing), add option for calendar year or winters (flexible parameter, Jul, Jan, Aug, Sept)
