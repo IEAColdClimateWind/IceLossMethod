@@ -1,0 +1,3 @@
+file_name,turbine_name,rated_power,hub_height,elevation
+cleaned_file_fake_data2 (other_col_names).csv,T1,2000,210,85
+cleaned_file_fake_data2 (other_col_names) copy.csv,T2,3000,200,85
