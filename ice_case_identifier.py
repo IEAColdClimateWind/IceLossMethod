@@ -124,7 +124,6 @@ class IceLossDetector(pd.DataFrame):
     def addParametersFromJSON(self, json_fname):
         #TODO check for validity, adapt variable names, add missing variables to json, adapt to the change in the json for multiple turbines
         self.parameters = readJsonParameters(json_fname)
-    
             
     def saveParametersToJSON(self, json_fname):
         # Determine turbine name
@@ -188,7 +187,38 @@ class IceLossDetector(pd.DataFrame):
         with open(json_fname, "w") as file:
             json.dump(data, file, indent=4)
             
-        return data    
+        return data  
+    
+    #----------------- Useful function to handle data ----------------------
+    
+    def selectPeriod(self,startTime,endTime,inplace=False):
+        if inplace:
+            self = self.loc[(self.index>=startTime)&(self.index<=endTime),:]
+        else:
+            newTurbine = self.copy()
+            newTurbine = newTurbine.loc[(newTurbine.index>=startTime)&(newTurbine.index<=endTime),:]
+            return newTurbine
+        
+    def flagOtherManual(self,indexList=None,startTime=None,endTime=None):
+        if indexList is not None:
+            #index list is either a list of index or a boolean list of all indexes where flag_other should be true
+            self.loc[indexList,'other_manual'] = True
+            
+        if ((startTime is not None) & (endTime is not None)):
+            self.loc[(self.index>=startTime)&(self.index<=endTime),'other_manual'] = True
+        
+    def removeOtherManual(self,indexList=None,startTime=None,endTime=None):
+        if indexList is not None:
+            #index list is either a list of index or a boolean list of all indexes where flag_other should be true
+            self.loc[indexList,'other_manual'] = False
+            
+        if ((startTime is not None) & (endTime is not None)):
+            self.loc[(self.index>=startTime)&(self.index<=endTime),'other_manual'] = False
+        
+    def resetOtherManual(self):
+        #index list is either a list of index or a boolean list of all indexes where flag_other should be true
+        self.loc[:,'other_manual'] = False
+        
     
     #----------------- Power curve related methods -------------------------
     
