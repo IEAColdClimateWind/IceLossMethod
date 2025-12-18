@@ -84,10 +84,13 @@ layout = html.Div(children=[
     dcc.Download(id="data-to-download"),
     dcc.Download(id="json-download"),
     dcc.Download(id="settings-download"),
+    dcc.Download(id="farm-data-download"),
     dcc.Upload(id="settings-upload", style={"display": "none"}),
 
     # 7. Fichier tampons de json pour setter les clé dynamique
-    dcc.Store(id='intermediate-json-config')
+    dcc.Store(id='intermediate-json-config'),
+    dcc.Store(id="cleaned-files-store", storage_type="memory")
+    
 ])
 
 

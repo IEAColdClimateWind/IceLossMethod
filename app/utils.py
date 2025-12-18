@@ -6,7 +6,7 @@ import csv
 import json
 
 # Dash components pour affichage
-from dash import html, dcc, ctx
+from dash import html, dcc, ctx, dash_table
 import dash_bootstrap_components as dbc
 
 # === COLONNES REQUISES POUR LE TRAITEMENT ===
@@ -94,7 +94,7 @@ def parse_contents_into_df(contents, filename):
     return df
 
 
-def parse_contents_to_html(contents, filename):
+def parse_contents_to_html(contents, filename, prefilled_farm_dash_table = None):
     """
     Génère un aperçu HTML à partir d’un fichier uploadé, incluant :
         - un aperçu des 5 premières lignes du DataFrame,
@@ -332,8 +332,10 @@ def parse_contents_to_html(contents, filename):
 
     # Retourne le bloc complet : nom du fichier + tableau + mapping + bouton
     return html.Div([
-  
-        table,  # Aperçu tableau
+        
+        # Table header container
+        html.Div(id='selected-turbine-csv-head-container', children=[table]),
+
         dbc.Row([
             dbc.Col([
                 dcc.Upload(
@@ -344,6 +346,7 @@ def parse_contents_to_html(contents, filename):
                     style={'cursor': 'pointer'}
                 ),
             ], width="auto"),
+
         ],
             justify='start',
             className="my-3"
@@ -358,7 +361,7 @@ def parse_contents_to_html(contents, filename):
         # Ligne des boutons
         dbc.Row([
             dbc.Col(
-                dbc.Button("Download Clean Files", id='download-clean-files', color="primary"),
+                dbc.Button("Download Clean Files", id='download-clean-files-btn', color="primary"),
                 width="auto"
             ),
         ],
@@ -374,29 +377,36 @@ def parse_contents_to_html(contents, filename):
             # --- Bloc 1 : Turbine Information ---
             dbc.AccordionItem(
                 children=[
-                    html.H6("Turbine information", className="mt-2"),
+                    html.Div(
+                        id="farm-csv-table-container", 
+                        children=[prefilled_farm_dash_table] if prefilled_farm_dash_table is not None else []
+                    ),
                     dbc.Row([
-                        dbc.Col([
-                            dbc.Label("Name"),
-                            dbc.Input(id='turbine-name', type='text', placeholder="Enter turbine name"),
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Label("Rated power (kW)"),
-                            dbc.Input(id='rated-power', type='number', placeholder="e.g., 800"),
-                        ], width=6),
-                    ]),
+                        
+                    ], justify='center', className="mb-4"),
                     dbc.Row([
+                        dbc.Col(
+                            dbc.Button("Download Wind Farm.csv", id='download-farm-info-btn', color="secondary", type="button"),
+                            width="auto"
+                        ),
+
                         dbc.Col([
-                            dbc.Label("Hub height (m)"),
-                            dbc.Input(id='hub-height', type='number', placeholder="e.g., 50"),
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Label("Elevation (m)"),
-                            dbc.Input(id='elevation', type='number', placeholder="e.g., 10"),
-                        ], width=6),
-                    ]),
+                            dcc.Upload(
+                                id='farm-csv-upload',
+                                children=dbc.Button("Load Farm Data", id="load-wind-farm-info-btn", color="secondary"),
+                                accept='.csv',
+                                multiple=False,
+                                style={'cursor': 'pointer'}
+                            ),
+                        ], width="auto"),
+                    ],
+                        justify='start',
+                        className="my-3"
+                    ),
+
+                    
                 ],
-                title=html.Span("Turbine information", style={'textDecoration': 'underline'}),
+                title=html.Span("Wind Farm information", style={'textDecoration': 'underline'}),
                 item_id="accordion-turbine-info"
             ),
 
@@ -457,4 +467,68 @@ def parse_contents_to_html(contents, filename):
 
         dcc.Graph(id='power-curve-graph'),
         dcc.Graph(id='time-series-graph'),
+        html.Div(id='farm-stats'),
     ])
+
+
+def build_farm_table_from_timeseries_uploads(
+    file_contents: list[str],
+    file_names: list[str],
+):
+    rows = []
+
+    for contents, filename in zip(file_contents, file_names):
+        df = parse_contents_into_df(contents, filename)
+
+        if "ID" not in df.columns:
+            raise ValueError(f"File {filename} does not contain an 'ID' column")
+
+        unique_ids = df["ID"].dropna().unique()
+
+        for uid in unique_ids:
+            rows.append(
+                {
+                    "file_name": filename,
+                    "turbine_name": uid,
+                    "rated_power": None,
+                    "hub_height": None,
+                    "elevation": None,
+                }
+            )
+
+    table_df = pd.DataFrame(
+        rows,
+        columns=[
+            "file_name",
+            "turbine_name",
+            "rated_power",
+            "hub_height",
+            "elevation",
+        ],
+    )
+
+    return dash_table.DataTable(
+        id="farm-csv-editable-table",
+        data=table_df.to_dict("records"),
+        columns=[
+            {"name": "File name", "id": "file_name", "editable": False},
+            {"name": "Turbine ID", "id": "turbine_name", "editable": False},
+            {"name": "Rated power (kW)", "id": "rated_power", "editable": True},
+            {"name": "Hub height (m)", "id": "hub_height", "editable": True},
+            {"name": "Elevation (m)", "id": "elevation", "editable": True},
+        ],
+        editable=True,
+        row_deletable=False,
+        sort_action="native",
+        filter_action="native",
+        page_action="native",
+        page_size=12,
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "textAlign": "left",
+            "padding": "6px",
+            "whiteSpace": "normal",
+            "height": "auto",
+        },
+        style_header={"fontWeight": "bold"},
+    )
