@@ -1,0 +1,5 @@
+file_name,turbine_name,rated_power,hub_height,elevation
+combined_T1_T2_fake_data2.csv,T1,tes,1,1
+combined_T1_T2_fake_data2.csv,T2,2,1,1
+combined_T3_T4_fake_data2.csv,T3,2,1,11
+combined_T3_T4_fake_data2.csv,T4,2,1,1
