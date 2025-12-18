@@ -4,6 +4,7 @@ import json
 # for testing
 from pathlib import Path
 import matplotlib.pyplot as plt
+from datetime import datetime
 
 class IceLossDetector(pd.DataFrame):
     
@@ -66,6 +67,7 @@ class IceLossDetector(pd.DataFrame):
         Creates a IceLossDetector from a standard csv file generated from the import module
         
         """
+        #TODO: optionnal json file for column matching
         full_data = pd.read_csv(fileName,index_col=0)
         ice_det = cls.constructFromDataFrame(full_data)
         return ice_det
@@ -247,7 +249,7 @@ class IceLossDetector(pd.DataFrame):
 
         # group by bin, calculate bunch of statistics for each bin
         # aggregation functions are listed as ('name of result', function)
-        pc = reference_dataset_b[["wind_speed_c","output_power","bin"]].groupby('bin',observed=False).agg([
+        fullPc = reference_dataset_b[["wind_speed_c","output_power","bin"]].groupby('bin',observed=False).agg([
             ('mean', 'mean'),
             ('low_quantile', lambda x: x.quantile(self.parameters['low_quantile'])),
             ('high_quantile', lambda x: x.quantile(self.parameters['high_quantile'])),
@@ -256,6 +258,9 @@ class IceLossDetector(pd.DataFrame):
             ('min', 'min'),
             ('count', 'count')
         ])
+        pc = fullPc.loc[:,[('wind_speed_c','mean'),('output_power','mean'),('output_power','low_quantile'),('output_power','high_quantile')]]
+        pc.columns = ['windSpeedMean','outputPowerMean','outputPowerLowQuantile','outputPowerHighQuantile']
+        pc.reset_index(drop=True,inplace=True)
         # print(pc[[('wind_speed_c','mean'),('output_power','mean'),('output_power','P10'),('output_power','P90')]])
         self.powerCurve = pc
         #pc.rename(columns = {"wind_speed_c":"wind_speed"},inplace=True)
@@ -264,7 +269,7 @@ class IceLossDetector(pd.DataFrame):
         # Flatten MultiIndex columns to make refrencing make more sense
         #pc_subset.columns = ['{}_{}'.format(col[0], col[1]) for col in pc_subset.columns]
         # print(pc_subset)
-        #return pc_subset
+        return fullPc
     
     def addExpectedPowerToData(self):
         if self.powerCurve is None:
@@ -272,12 +277,12 @@ class IceLossDetector(pd.DataFrame):
         pc = self.powerCurve
         self.temperatureCorrection()
         # interpoaltion cannot handle NaN
-        pc_mask = ~(np.isnan(pc[('wind_speed_c','mean')]))
+        pc_mask = ~(np.isnan(pc['windSpeedMean']))
         # piecewise linear interpolation over the power curves to get the refrence values for alarm creation
-        y10 = pc[pc_mask][('output_power','low_quantile')].to_numpy()
-        y90 = pc[pc_mask][('output_power','high_quantile')].to_numpy()
-        w = pc[pc_mask][('wind_speed_c','mean')].to_numpy()
-        y = pc[pc_mask][('output_power','mean')].to_numpy()
+        y10 = pc[pc_mask]['outputPowerLowQuantile'].to_numpy()
+        y90 = pc[pc_mask]['outputPowerHighQuantile'].to_numpy()
+        w = pc[pc_mask]['windSpeedMean'].to_numpy()
+        y = pc[pc_mask]['outputPowerMean'].to_numpy()
         self['low_quantile_ref'] = np.interp(self['wind_speed_c'].to_numpy(),w,y10)
         self['high_quantile_ref'] = np.interp(self['wind_speed_c'].to_numpy(),w,y90)
         self['expected_power'] = np.interp(self['wind_speed_c'].to_numpy(),w,y)
@@ -287,35 +292,13 @@ class IceLossDetector(pd.DataFrame):
             fileName = f"{self.parameters['turbine_name']}_pc.csv"
         if (self.powerCurve is None) | recompute:
             self.makePowerCurve()
-        self.powerCurve.to_csv(fileName,index_label=False)
+        self.powerCurve.to_csv(fileName,index=False)
         
     def import_power_curve(self,fileName):
-        newPowerCurve = pd.read_csv(fileName, header=[0, 1], index_col=0)
-        required_cols = [
-            ('wind_speed_c', 'mean'),
-            ('wind_speed_c', 'low_quantile'),
-            ('wind_speed_c', 'high_quantile'),
-            ('wind_speed_c', 'std.dev'),
-            ('wind_speed_c', 'max'),
-            ('wind_speed_c', 'min'),
-            ('wind_speed_c', 'count'),
-            ('output_power', 'mean'),
-            ('output_power', 'low_quantile'),
-            ('output_power', 'high_quantile'),
-            ('output_power', 'std.dev'),
-            ('output_power', 'max'),
-            ('output_power', 'min'),
-            ('output_power', 'count')
-        ]
-        if not pd.MultiIndex.from_tuples(required_cols).isin(newPowerCurve.columns).all():
+        newPowerCurve = pd.read_csv(fileName)
+        required_cols = ['windSpeedMean','outputPowerMean','outputPowerLowQuantile','outputPowerHighQuantile']
+        if not np.isin(required_cols,newPowerCurve.columns).all():
             raise ImportError('The provided power curve does not match the column names of the standard file')
-        if not (['(0, 1]', '(1, 2]', '(2, 3]', '(3, 4]', '(4, 5]', '(5, 6]', '(6, 7]',
-               '(7, 8]', '(8, 9]', '(9, 10]', '(10, 11]', '(11, 12]', '(12, 13]',
-               '(13, 14]', '(14, 15]', '(15, 16]', '(16, 17]', '(17, 18]', '(18, 19]',
-               '(19, 20]', '(20, 21]', '(21, 22]', '(22, 23]', '(23, 24]', '(24, 25]',
-               '(25, 26]', '(26, 27]', '(27, 28]', '(28, 29]', '(29, 30]'] ==newPowerCurve.index).all():
-            raise ImportError('The provided power curve does not match the index names of the standard file')
-        newPowerCurve.index = pd.Categorical(newPowerCurve.index, categories=newPowerCurve.index.unique(), ordered=True)
         self.powerCurve = newPowerCurve
 
     def powerCurveDiagnostic(self):
@@ -384,6 +367,8 @@ class IceLossDetector(pd.DataFrame):
             AttributeError('The low quantile reference power is not computed, please compute it using identifyIceLossPeriods()')
         # separate the points when the turbine has stopped from the other icing alarms
         # Stops are events where we have an icing alarm, but the power is below a certain limit. 
+        #TODO: add a check on RPM?
+        #standstill = idle or completely stopped
         stop_mask = ((self['iceLossMask'] == 1.0) & (self['output_power'] <= self.parameters['stop_limit']) &\
                     (self['wind_speed'] >= self.parameters['minimum_wind_speed']))
         self['iceLossStandstillMask'] = 1.0*stop_mask 
@@ -460,7 +445,7 @@ class IceLossDetector(pd.DataFrame):
 
     #TODO add as many functions as there are statistics to be computed
     
-    def computeIcingStatistics(self):
+    def computeIcingStatistics(self, periodStarts=None, periodEnds=None, frequency=None):
         """
         Statistics of production:
           o    Icing hours / icing as % of year
@@ -474,57 +459,101 @@ class IceLossDetector(pd.DataFrame):
           o    Number of icing events
         """
         
+        #TODO: add per year calculation or per period
+        #statistics could be a dataframe with start time as index
+        
         if 'iceLossMask' not in self.columns:
             self.identifyIceLossPeriods()
         
-        # separate the icing events
-        reduced_prod_events = self[self['iceLossMask'] == 1]
-        stops_events = self[self['iceLossStandstillMask'] == 1]
-        icing_events = pd.concat((reduced_prod_events, stops_events))
+        if frequency is not None:
+            if frequency not in ['yearly', 'monthly']:
+                raise AttributeError("frequency must be either 'yearly' or 'monthly'")
+    
+            tMin = self.index.min()
+            tMax = self.index.max()
+    
+            if frequency == 'yearly':
+                edges = pd.date_range(start=tMin.normalize(), end=tMax, freq='YS')
+            else:
+                edges = pd.date_range(start=tMin.normalize(), end=tMax, freq='MS')
+                
+            if edges[0] > tMin:
+                edges = edges.insert(0, tMin)
+            if edges[-1] < tMax:
+                edges = edges.append(pd.DatetimeIndex([tMax]))
+    
+            periodStarts = list(edges[:-1])
+            periodEnds = list(edges[1:])
         
-        # total dataset length in hours§
-        self.statistics["total_data_hours"]            = float(np.round((self.index.max() - self.index.min()).total_seconds() /60 /60 ,0))
+        if periodStarts is None:
+            periodStarts = [self.index.min()]
+        if periodEnds is None:
+            periodEnds = [self.index.max()]
+        if (type(periodStarts)!=list) | (type(periodEnds)!=list):
+            raise AttributeError('Period starts and ends must be a list of datetime')
+        if len(periodEnds) != len(periodStarts):
+            raise AttributeError('Length of the list of period start does not equal to the one of the period length')
         
-        # these are not continuous cant count from timestamps
-        self.statistics["total_icing_duration"]        = float(np.round((1/6)*len(icing_events),0)) # number of lines * 10 minutes / 60 minutes = total hours
-        self.statistics["reduced_production_duration"] = float(np.round((1/6)*len(reduced_prod_events),0))
-        self.statistics["icing_stop_duration"]         = float(np.round((1/6)*len(stops_events),0))
-        #icing share is often interesting since its in the ice class.
-        self.statistics["total_icing_share"]           = float(np.round(len(icing_events) / len(self.index) * 100,2))
-        self.statistics["reduced_production_share"]    = float(np.round(len(reduced_prod_events) / len(self.index) * 100, 2))
-        self.statistics["icing_stop_share"]            = float(np.round(len(stops_events) / len(self.index) * 100, 2))
-        # energy in kWh
-        self.statistics["total_production"]          = self.computeProducedEnergy()         #float(np.round((self['output_power']/6).sum(),0))
-        self.statistics["total_expected_production"] = self.computeExpectedEnergy()         #float(np.round((self['expected_power']/6).sum(),0))
-        self.statistics["total_losses"]              = self.computeTotalLosses()            #float(np.round(self['production_loss'].sum(),0))
-        self.statistics["total_icing_loss"]          = self.computeTotalIcingLosses()       #float(np.round(icing_events["production_loss"].sum(),0))
-        self.statistics["reduced_production_loss"]   = self.computeTotalIcingReducedProductionLosses() #float(np.round(reduced_prod_events["production_loss"].sum(),0))
-        self.statistics["icing_stop_loss"]           = self.computeTotalIcingStandstillLosses() #float(np.round(stops_events["production_loss"].sum(),0))
-        # losses in % of AEP
-        self.statistics["total_icing_share"]         = float(np.round(self.statistics["total_icing_loss"] / 
-                                                                      self.statistics["total_expected_production"],2))
-        self.statistics["reduced_producion_share"]   = float(np.round(self.statistics["reduced_production_loss"] / 
-                                                                      self.statistics["total_expected_production"],2))
-        self.statistics["icing_stop_share"]          = float(np.round(self.statistics["icing_stop_loss"] /
-                                                                      self.statistics["total_expected_production"],2))
+        #create empty DF
+        statistics = pd.DataFrame(columns=['total_data_hours', 'total_icing_duration', 'reduced_production_duration', 
+                                           'icing_stop_duration', 'total_icing_share', 'reduced_production_share', 'icing_stop_share', 
+                                           'total_production', 'total_expected_production', 'total_losses', 'total_icing_loss', 
+                                           'reduced_production_loss', 'icing_stop_loss', 'reduced_producion_share', 'maintenance_hours', 
+                                           'faults_hours', 'curtailment_hours', 'other_manual_hours', 'icing_codes_hours', 
+                                           'ice_detection_hours', 'ips_status_hours', 'reference_hours'])
         
-        # other status variables again, cant count form timestamps so number of hours is number of lines * 1/6:
-        # maintenance	faults	curtailment	other_manual	icing_codes	ice_detection	ips_status	cleanedDatasetMask
-        self.statistics["maintenance_hours"]   = float(np.round((1/6)*len(self[self["maintenance"]       ==True]),0))
-        self.statistics["faults_hours"]        = float(np.round((1/6)*len(self[self["faults"]            ==True]),0))
-        self.statistics["curtailment_hours"]   = float(np.round((1/6)*len(self[self["curtailment"]       ==True]),0))
-        self.statistics["other_manual_hours"]  = float(np.round((1/6)*len(self[self["other_manual"]      ==True]),0))
-        self.statistics["icing_codes_hours"]   = float(np.round((1/6)*len(self[self["icing_codes"]       ==True]),0))
-        self.statistics["ice_detection_hours"] = float(np.round((1/6)*len(self[self["ice_detection"]     ==True]),0))
-        self.statistics["ips_status_hours"]    = float(np.round((1/6)*len(self[self["ips_status"]        ==True]),0))
-        self.statistics["reference_hours"]     = float(np.round((1/6)*len(self[self["cleanedDatasetMask"]==True]),0))
+        for periodStart, periodEnd in zip(periodStarts,periodEnds):
+            periodDF = self.selectPeriod(periodStart, periodEnd).copy()
+            # separate the icing events
+            reduced_prod_events = periodDF[periodDF['iceLossMask'] == 1]
+            stops_events = periodDF[periodDF['iceLossStandstillMask'] == 1]
+            icing_events = pd.concat((reduced_prod_events, stops_events))
+            
+            # total dataset length in hours§
+            statistics.loc[periodStart,"total_data_hours"]            = float(np.round((periodDF.index.max() - periodDF.index.min()).total_seconds() /60 /60 ,0))
+            
+            # these are not continuous cant count from timestamps
+            statistics.loc[periodStart,"total_icing_duration"]        = float(np.round((1/6)*len(icing_events),0)) # number of lines * 10 minutes / 60 minutes = total hours
+            statistics.loc[periodStart,"reduced_production_duration"] = float(np.round((1/6)*len(reduced_prod_events),0))
+            statistics.loc[periodStart,"icing_stop_duration"]         = float(np.round((1/6)*len(stops_events),0))
+            #icing share is often interesting since its in the ice class.
+            statistics.loc[periodStart,"total_icing_share"]           = float(np.round(len(icing_events) / len(periodDF.index) * 100,2))
+            statistics.loc[periodStart,"reduced_production_share"]    = float(np.round(len(reduced_prod_events) / len(periodDF.index) * 100, 2))
+            statistics.loc[periodStart,"icing_stop_share"]            = float(np.round(len(stops_events) / len(periodDF.index) * 100, 2))
+            # energy in kWh
+            statistics.loc[periodStart,"total_production"]          = periodDF.computeProducedEnergy()         #float(np.round((periodDF['output_power']/6).sum(),0))
+            statistics.loc[periodStart,"total_expected_production"] = periodDF.computeExpectedEnergy()         #float(np.round((periodDF['expected_power']/6).sum(),0))
+            statistics.loc[periodStart,"total_losses"]              = periodDF.computeTotalLosses()            #float(np.round(periodDF['production_loss'].sum(),0))
+            statistics.loc[periodStart,"total_icing_loss"]          = periodDF.computeTotalIcingLosses()       #float(np.round(icing_events["production_loss"].sum(),0))
+            statistics.loc[periodStart,"reduced_production_loss"]   = periodDF.computeTotalIcingReducedProductionLosses() #float(np.round(reduced_prod_events["production_loss"].sum(),0))
+            statistics.loc[periodStart,"icing_stop_loss"]           = periodDF.computeTotalIcingStandstillLosses() #float(np.round(stops_events["production_loss"].sum(),0))
+            # losses in % of total production not neccessarily AEP
+            statistics.loc[periodStart,"total_icing_share"]         = float(np.round(statistics.loc[periodStart,"total_icing_loss"] / 
+                                                                          statistics.loc[periodStart,"total_expected_production"],2))
+            statistics.loc[periodStart,"reduced_producion_share"]   = float(np.round(statistics.loc[periodStart,"reduced_production_loss"] / 
+                                                                          statistics.loc[periodStart,"total_expected_production"],2))
+            statistics.loc[periodStart,"icing_stop_share"]          = float(np.round(statistics.loc[periodStart,"icing_stop_loss"] /
+                                                                          statistics.loc[periodStart,"total_expected_production"],2))
+            
+            # other status variables again, cant count form timestamps so number of hours is number of lines * 1/6:
+            # maintenance	faults	curtailment	other_manual	icing_codes	ice_detection	ips_status	cleanedDatasetMask
+            statistics.loc[periodStart,"maintenance_hours"]   = float(np.round((1/6)*len(periodDF[periodDF["maintenance"]       ==True]),0))
+            statistics.loc[periodStart,"faults_hours"]        = float(np.round((1/6)*len(periodDF[periodDF["faults"]            ==True]),0))
+            statistics.loc[periodStart,"curtailment_hours"]   = float(np.round((1/6)*len(periodDF[periodDF["curtailment"]       ==True]),0))
+            statistics.loc[periodStart,"other_manual_hours"]  = float(np.round((1/6)*len(periodDF[periodDF["other_manual"]      ==True]),0))
+            statistics.loc[periodStart,"icing_codes_hours"]   = float(np.round((1/6)*len(periodDF[periodDF["icing_codes"]       ==True]),0))
+            statistics.loc[periodStart,"ice_detection_hours"] = float(np.round((1/6)*len(periodDF[periodDF["ice_detection"]     ==True]),0))
+            statistics.loc[periodStart,"ips_status_hours"]    = float(np.round((1/6)*len(periodDF[periodDF["ips_status"]        ==True]),0))
+            statistics.loc[periodStart,"reference_hours"]     = float(np.round((1/6)*len(periodDF[periodDF["cleanedDatasetMask"]==True]),0))
+            
+        self.statistics = statistics
         
     def exportStatistics(self,fileName=None,recompute=False):
         if fileName is None:
             fileName = ice_det.parameters['turbine_name']+'_statistics.csv'
         if (len(self.statistics) == 0) | recompute:
             self.computeIcingStatistics()
-        pd.Series(self.statistics).to_csv(fileName,header=None)
+        pd.Series(self.statistics).to_csv(fileName)
         
     #---------------- Full flow computation methods --------------------------
 
@@ -563,7 +592,7 @@ class IceLossDetector(pd.DataFrame):
         if self.powerCurve is None:
             AttributeError('The power curve has not been computed, please compute it using makePowerCurve()')
         pc = self.powerCurve
-        pc.plot(x=('wind_speed_c','mean'), y=[('output_power','mean'),('output_power','low_quantile'),('output_power','high_quantile')],label=['mean','low_quantile','high_quantile'])
+        pc.plot(x='windSpeedMean', y=['outputPowerMean','outputPowerLowQuantile','outputPowerHighQuantile'],label=['mean','low_quantile','high_quantile'])
         ax2 = plt.gca()
         self.plot.scatter(x="wind_speed_c",y='output_power',color='gray',alpha=0.1, ax=ax2,label='All points')
         self[self['iceLossMask'] == 1].plot.scatter(x="wind_speed_c",y='output_power',color='red',alpha=0.1, ax=ax2, label='Icing losses')
@@ -581,6 +610,8 @@ class IceLossDetector(pd.DataFrame):
         plt.tight_layout()
         plt.show()
         
+    #TODO: event length histogram
+        
     #------------------ Static Methods -----------------------
 
     @staticmethod
@@ -589,7 +620,7 @@ class IceLossDetector(pd.DataFrame):
         Generates the icing statistics from a standard json file that imports csv files generated from the import module
         
         """
-
+        #TODO: handle single csv with ID column
         farm_statistics_dict = {}
         # TODO: better handle parent directory that has all the CSV
        
@@ -600,17 +631,29 @@ class IceLossDetector(pd.DataFrame):
             
         readJsonParameters(jsonFileName)
         windFarmDF = readWindFarmDFFromCSV(windFarmCsv,customColNamesDict=customColNamesDict)
-
-        for row in windFarmDF.itertuples(index=False):
-            turbine_name = row.turbine_name
-            csv_fname = row.file_name
-
-            ice_det = IceLossDetector.importFromCSV(Path('app') / 'data' / csv_fname)
-            ice_det.addParametersFromJSON(jsonFileName)
-            ice_det.parameters.update(row._asdict())
-            ice_det.computeFullChain()
-
-            farm_statistics_dict[csv_fname] = ice_det.statistics
+        
+        #Handle 2 cases, 1- A single csv with all the turbine and a ID column, 2- A csv file per turbine
+        if (len(windFarmDF.file_name.unique()) == 1) & (len(windFarmDF)!=1):
+            fullDF = IceLossDetector.importFromCSV(Path('app') / 'data' / windFarmDF.file_name[0])
+            if 'ID' not in fullDF.columns:
+                raise ImportError('Single data csv file in import list, the file does not include the ID column necessary for multiple turbines')
+            uniqueTurbines = fullDF.ID.unique()
+            for uniqueTurbine in uniqueTurbines:
+                ice_det = fullDF.loc[fullDF.ID==uniqueTurbine,:]
+                ice_det.addParametersFromJSON(jsonFileName)
+                ice_det.parameters.update(windFarmDF.loc[windFarmDF.turbine_name==uniqueTurbine,:].squeeze(axis=0).to_dict())
+                ice_det.computeFullChain()
+                farm_statistics_dict[uniqueTurbine] = ice_det.statistics
+        else:
+            for row in windFarmDF.itertuples(index=False):
+                turbine_name = row.turbine_name
+                csv_fname = row.file_name
+                ice_det = IceLossDetector.importFromCSV(Path('app') / 'data' / csv_fname)
+                ice_det.addParametersFromJSON(jsonFileName)
+                ice_det.parameters.update(row._asdict())
+                ice_det.computeFullChain()
+    
+                farm_statistics_dict[turbine_name] = ice_det.statistics
 
         return farm_statistics_dict
 
@@ -629,17 +672,28 @@ class IceLossDetector(pd.DataFrame):
             
         readJsonParameters(jsonFileName)
         windFarmDF = readWindFarmDFFromCSV(windFarmCsv,customColNamesDict=customColNamesDict)
-
-        for row in windFarmDF.itertuples(index=False):
-            turbine_name = row.turbine_name
-            csv_fname = row.file_name
-
-            ice_det = IceLossDetector.importFromCSV(Path('app') / 'data' / csv_fname)
-            ice_det.addParametersFromJSON(jsonFileName)
-            ice_det.parameters.update(row._asdict())
-            #ice_det.computeFullChain()
-
-            farm_dict[turbine_name] = ice_det
+        
+        #Handle 2 cases, 1- A single csv with all the turbine and a ID column, 2- A csv file per turbine
+        if (len(windFarmDF.file_name.unique()) == 1) & (len(windFarmDF)!=1):
+            fullDF = IceLossDetector.importFromCSV(Path('app') / 'data' / windFarmDF.file_name[0])
+            if 'ID' not in fullDF.columns:
+                raise ImportError('Single data csv file in import list, the file does not include the ID column necessary for multiple turbines')
+            uniqueTurbines = fullDF.ID.unique()
+            for uniqueTurbine in uniqueTurbines:
+                ice_det = fullDF.loc[fullDF.ID==uniqueTurbine,:]
+                ice_det.addParametersFromJSON(jsonFileName)
+                ice_det.parameters.update(windFarmDF.loc[windFarmDF.turbine_name==uniqueTurbine,:].squeeze(axis=0).to_dict())
+                farm_dict[uniqueTurbine] = ice_det
+        else:
+            for row in windFarmDF.itertuples(index=False):
+                turbine_name = row.turbine_name
+                csv_fname = row.file_name
+                ice_det = IceLossDetector.importFromCSV(Path('app') / 'data' / csv_fname)
+                ice_det.addParametersFromJSON(jsonFileName)
+                ice_det.parameters.update(row._asdict())
+                #ice_det.computeFullChain()
+    
+                farm_dict[turbine_name] = ice_det
 
         return farm_dict
 
@@ -709,15 +763,15 @@ def readJsonParameters(json_fname):
 
 #--------------- Main functions -----------------------------
         
-if __name__ == '__main__':
+if __name__ == '__main__2':
 
     json_path_name = Path('app') / 'data'  / 'settings_new_format.json'
-
-
     farm_stats = IceLossDetector.compute_wind_farm('windFarmImport.csv',jsonFileName=json_path_name)
     print(farm_stats)
 
-if __name__ == '__main__2':
+
+
+if __name__ == '__main__':
     #possible to add a loop here from the new values of the json file to do an entire wind farm
     #make a constructor for dataframes
     #TODO option to make it year by year, it can be for power curve generation, but also for results (add option to have an annual thing), add option for calendar year or winters (flexible parameter, Jul, Jan, Aug, Sept)
@@ -733,6 +787,7 @@ if __name__ == '__main__2':
     ice_det.to_csv('output.csv')
     ice_det.plotPowerCurve() #optional
     ice_det.plotTimeseries()
+    ice_det.exportPowerCurveToCSV()
     
     ice_det.computeIcingStatistics()
     print(ice_det.statistics)
