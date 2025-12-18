@@ -10,6 +10,7 @@ from plotly.subplots import make_subplots
 
 
 DATA_DIR = Path(__file__).resolve().parent / 'app' / 'data'
+#DATA_DIR = Path(__file__).resolve().parent / 'data'
 
 class IceLossDetector(pd.DataFrame):
     
@@ -982,7 +983,7 @@ if __name__ == '__main__':
     #possible to add a loop here from the new values of the json file to do an entire wind farm
     #make a constructor for dataframes
     #TODO option to make it year by year, it can be for power curve generation, but also for results (add option to have an annual thing), add option for calendar year or winters (flexible parameter, Jul, Jan, Aug, Sept)
-    json_path_name = Path('app') / 'data'  / 'settings_new_format.json'
+    json_path_name = Path('data') / 'settings_new_format.json'
     ice_det = IceLossDetector.importFromCSV(DATA_DIR / "cleaned_file_fake_data2 (other_col_names).csv") #have a constructor that does the whole thing
     ice_det.addParametersFromJSON(json_path_name)
     ice_det.identifyCleanedDataset() #options to activate those functions or not
