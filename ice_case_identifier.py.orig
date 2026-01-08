@@ -1,16 +1,10 @@
 import pandas as pd
 import numpy as np
 import json
-
+# for testing
 from pathlib import Path
 import matplotlib.pyplot as plt
 from datetime import datetime
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
-
-DATA_DIR = Path(__file__).resolve().parent / 'app' / 'data'
-#DATA_DIR = Path(__file__).resolve().parent / 'data'
 
 class IceLossDetector(pd.DataFrame):
     
@@ -129,9 +123,9 @@ class IceLossDetector(pd.DataFrame):
         #return new_data
         
     #------------------- Parameter handling methods -----------------------------
-    def addParametersFromJSON(self, json_source):
+    def addParametersFromJSON(self, json_fname):
         #TODO check for validity, adapt variable names, add missing variables to json, adapt to the change in the json for multiple turbines
-        self.parameters = read_json_parameters(json_source)
+        self.parameters = readJsonParameters(json_fname)
             
     def saveParametersToJSON(self, json_fname):
         # Determine turbine name
@@ -605,83 +599,6 @@ class IceLossDetector(pd.DataFrame):
         ax2.set_title(f"Power curve: {self.parameters['turbine_name']}")
         plt.tight_layout()
         plt.show()
-
-
-
-
-    def plot_plotly_power_curves(self):
-        if self.powerCurve is None:
-            raise AttributeError(
-                "The power curve has not been computed. Call makePowerCurve() first."
-            )
-
-        pc = self.powerCurve
-
-        fig = go.Figure()
-
-        # ---- Power curve lines ----
-        fig.add_trace(
-            go.Scatter(
-                x=pc['windSpeedMean'],
-                y=pc['outputPowerMean'],
-                mode="lines",
-                name="Mean power curve",
-            )
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=pc['windSpeedMean'],
-                y=pc['outputPowerLowQuantile'],
-                mode="lines",
-                name="Low quantile",
-                line=dict(dash="dash"),
-            )
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=pc['windSpeedMean'],
-                y=pc['outputPowerHighQuantile'],
-                mode="lines",
-                name="High quantile",
-                line=dict(dash="dash"),
-            )
-        )
-
-        # ---- All points ----
-        fig.add_trace(
-            go.Scatter(
-                x=self["wind_speed_c"],
-                y=self["output_power"],
-                mode="markers",
-                name="All points",
-                marker=dict(color="gray", opacity=0.1),
-            )
-        )
-
-        # ---- Icing losses ----
-        icing_mask = self["iceLossMask"] == 1
-        fig.add_trace(
-            go.Scatter(
-                x=self.loc[icing_mask, "wind_speed_c"],
-                y=self.loc[icing_mask, "output_power"],
-                mode="markers",
-                name="Icing losses",
-                marker=dict(color="red", opacity=0.3),
-            )
-        )
-
-        fig.update_layout(
-            title=f"Power curve: {self.parameters['turbine_name']}",
-            xaxis_title="Wind speed (corrected)",
-            yaxis_title="Power output",
-            legend_title="Legend",
-            template="plotly_white",
-        )
-
-        return fig
-
         
     def plotTimeseries(self): #TODO add option to add IPS activation and ice detection, add garnish to this function, print to file?
         fig, ax = plt.subplots(nrows=3,ncols=1,sharex=True,figsize=[12,8])
@@ -693,104 +610,12 @@ class IceLossDetector(pd.DataFrame):
         plt.tight_layout()
         plt.show()
         
-
-	#TODO: event length histogram
-
-
-
-    def plot_plotly_time_series(self):
-        fig = make_subplots(
-            rows=3,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.05,
-            specs=[
-                [{}],
-                [{}],
-                [{"secondary_y": True}],
-            ],
-        )
-
-        # ---- Power-related signals ----
-        for col in [
-            "output_power",
-            "low_quantile_ref",
-            "high_quantile_ref",
-            "expected_power",
-        ]:
-            fig.add_trace(
-                go.Scatter(
-                    x=self.index,
-                    y=self[col],
-                    mode="lines",
-                    name=col,
-                ),
-                row=1,
-                col=1,
-            )
-
-        # ---- Ice loss masks ----
-        for col in [
-            "iceLossOperationalMask",
-            "iceLossStandstillMask",
-        ]:
-            fig.add_trace(
-                go.Scatter(
-                    x=self.index,
-                    y=self[col],
-                    mode="lines",
-                    name=col,
-                ),
-                row=2,
-                col=1,
-            )
-
-        # ---- Wind speed ----
-        fig.add_trace(
-            go.Scatter(
-                x=self.index,
-                y=self["wind_speed"],
-                mode="lines",
-                name="wind_speed",
-            ),
-            row=3,
-            col=1,
-            secondary_y=False,
-        )
-
-        # ---- Temperature (secondary axis) ----
-        fig.add_trace(
-            go.Scatter(
-                x=self.index,
-                y=self["ambient_temperature"],
-                mode="lines",
-                name="ambient_temperature",
-            ),
-            row=3,
-            col=1,
-            secondary_y=True,
-        )
-
-        fig.update_layout(
-            title=f"Timeseries: {self.parameters['turbine_name']}",
-            template="plotly_white",
-            height=800,
-            legend_title="Signals",
-        )
-
-        fig.update_yaxes(title_text="Power", row=1, col=1)
-        fig.update_yaxes(title_text="Ice loss mask", row=2, col=1)
-        fig.update_yaxes(title_text="Wind speed", row=3, col=1, secondary_y=False)
-        fig.update_yaxes(
-            title_text="Temperature", row=3, col=1, secondary_y=True
-        )
-
-        fig.show()
-
+    #TODO: event length histogram
+        
     #------------------ Static Methods -----------------------
 
     @staticmethod
-    def compute_wind_farm(windFarmCsv, json_source=None, customColNamesDict=None):
+    def compute_wind_farm(windFarmCsv,jsonFileName=None,customColNamesDict=None):
         """
         Generates the icing statistics from a standard json file that imports csv files generated from the import module
         
@@ -799,12 +624,12 @@ class IceLossDetector(pd.DataFrame):
         farm_statistics_dict = {}
         # TODO: better handle parent directory that has all the CSV
        
-        if json_source is None:
-            # if no json file is provided, create a standard one
-            json_source = 'defaultParameters.json'
-            parameters = IceLossDetector.create_default_json_parameter_file(json_source)
+        if jsonFileName is None:
+            #if no json file is provided, create a standard one
+            jsonFileName = 'defaultParameters.json'
+            parameters = IceLossDetector.create_default_json_parameter_file(jsonFileName)
             
-        read_json_parameters(json_source)
+        readJsonParameters(jsonFileName)
         windFarmDF = readWindFarmDFFromCSV(windFarmCsv,customColNamesDict=customColNamesDict)
         
         #Handle 2 cases, 1- A single csv with all the turbine and a ID column, 2- A csv file per turbine
@@ -815,7 +640,7 @@ class IceLossDetector(pd.DataFrame):
             uniqueTurbines = fullDF.ID.unique()
             for uniqueTurbine in uniqueTurbines:
                 ice_det = fullDF.loc[fullDF.ID==uniqueTurbine,:]
-                ice_det.addParametersFromJSON(json_source)
+                ice_det.addParametersFromJSON(jsonFileName)
                 ice_det.parameters.update(windFarmDF.loc[windFarmDF.turbine_name==uniqueTurbine,:].squeeze(axis=0).to_dict())
                 ice_det.computeFullChain()
                 farm_statistics_dict[uniqueTurbine] = ice_det.statistics
@@ -823,8 +648,8 @@ class IceLossDetector(pd.DataFrame):
             for row in windFarmDF.itertuples(index=False):
                 turbine_name = row.turbine_name
                 csv_fname = row.file_name
-                ice_det = IceLossDetector.importFromCSV(DATA_DIR / csv_fname)
-                ice_det.addParametersFromJSON(json_source)
+                ice_det = IceLossDetector.importFromCSV(Path('app') / 'data' / csv_fname)
+                ice_det.addParametersFromJSON(jsonFileName)
                 ice_det.parameters.update(row._asdict())
                 ice_det.computeFullChain()
     
@@ -833,19 +658,19 @@ class IceLossDetector(pd.DataFrame):
         return farm_statistics_dict
 
     @staticmethod
-    def load_wind_farm(windFarmCsv, json_source=None, customColNamesDict=None):
+    def load_wind_farm(windFarmCsv,jsonFileName=None,customColNamesDict=None):
         """
         Creates a dictionnary of IceLossDetector objects from a standard json file that imports csv files generated from the import module
         
         """
 
         farm_dict = {}
-        if json_source is None:
+        if jsonFileName is None:
             #if no json file is provided, create a standard one
-            json_source = 'defaultParameters.json'
-            parameters = IceLossDetector.create_default_json_parameter_file(json_source)
+            jsonFileName = 'defaultParameters.json'
+            parameters = IceLossDetector.create_default_json_parameter_file(jsonFileName)
             
-        read_json_parameters(json_source)
+        readJsonParameters(jsonFileName)
         windFarmDF = readWindFarmDFFromCSV(windFarmCsv,customColNamesDict=customColNamesDict)
         
         #Handle 2 cases, 1- A single csv with all the turbine and a ID column, 2- A csv file per turbine
@@ -856,15 +681,15 @@ class IceLossDetector(pd.DataFrame):
             uniqueTurbines = fullDF.ID.unique()
             for uniqueTurbine in uniqueTurbines:
                 ice_det = fullDF.loc[fullDF.ID==uniqueTurbine,:]
-                ice_det.addParametersFromJSON(json_source)
+                ice_det.addParametersFromJSON(jsonFileName)
                 ice_det.parameters.update(windFarmDF.loc[windFarmDF.turbine_name==uniqueTurbine,:].squeeze(axis=0).to_dict())
                 farm_dict[uniqueTurbine] = ice_det
         else:
             for row in windFarmDF.itertuples(index=False):
                 turbine_name = row.turbine_name
                 csv_fname = row.file_name
-                ice_det = IceLossDetector.importFromCSV(DATA_DIR / csv_fname)
-                ice_det.addParametersFromJSON(json_source)
+                ice_det = IceLossDetector.importFromCSV(Path('app') / 'data' / csv_fname)
+                ice_det.addParametersFromJSON(jsonFileName)
                 ice_det.parameters.update(row._asdict())
                 #ice_det.computeFullChain()
     
@@ -889,42 +714,16 @@ def readWindFarmDFFromCSV(windFarmCsv,customColNamesDict=None):
         raise ImportError('The wind farm csv does not contain the required columns of the standard format')
     return windFarmDF
 
+def readJsonParameters(json_fname):
+    try:
+        with open(json_fname, 'r') as file:
+            data = json.load(file)
+    
+    except FileNotFoundError:
+        print("Error: The file 'data.json' was not found.")
+    except json.JSONDecodeError:
+        print("Error: Could not decode JSON from the file. Check for valid JSON syntax.")
 
-
-def read_json_parameters(json_source):
-    """
-    Read turbine parameters from either:
-    1) a JSON file path (str or Path)
-    2) a dict already loaded via json.load(...)
-    """
-
-    # ---------- Load JSON ----------
-    if isinstance(json_source, dict):
-        data = json_source
-
-    elif isinstance(json_source, (str, Path)):
-        json_path = Path(json_source)
-
-        try:
-            with json_path.open("r", encoding="utf-8") as file:
-                data = json.load(file)
-
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"Error: The file {json_path} was not found."
-            )
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Error: Could not decode JSON from {json_path}. Invalid JSON syntax."
-            ) from e
-
-    else:
-        raise TypeError(
-            "json_source must be either a dict (already loaded JSON) "
-            "or a file path (str or pathlib.Path)."
-        )
-
-    # ---------- Parse Parameters ----------
     try:
         parameters = {}
         turbine_info = data.get("turbines_info", [])
@@ -935,46 +734,39 @@ def read_json_parameters(json_source):
         parameters['rated_power'] = pd.to_numeric(turbine_info.get('rated_power',None),errors='coerce')
         parameters['hub_height'] = pd.to_numeric(turbine_info.get('hub_height',80),errors='coerce')
         parameters['elevation'] = pd.to_numeric(turbine_info.get('elevation',100),errors='coerce')
-
-        # Power curve binning
-        binning = data["power_curve_options"]["binning"]
-        parameters["low_wind_bin"] = binning["min"]
-        parameters["high_wind_bin"] = binning["max"]
-        parameters["wind_bin_size"] = binning["step"]
-
-        # Power curve limits
-        pc_opts = data["power_curve_options"]
-        parameters["low_quantile"] = pc_opts["lower_limit_percent"] / 100
-        parameters["high_quantile"] = pc_opts["upper_limit_percent"] / 100
-
-        # Temperature / icing
-        parameters["temperature_filter_level"] = pc_opts["temperature_threshold_C"]
-        parameters["icing_alarm_limit"] = 1  # TODO
-
-        # Other limits
-        parameters["alarm_time_limit"] = 3     # TODO
-        parameters["minimum_wind_speed"] = 3   # TODO
-        parameters["stop_limit"] = 100          # TODO
-
+        if np.isnan(parameters['elevation']):
+            parameters['elevation'] = 100
+            
+        #change the json syntax to mach the parameter names
+        parameters['low_wind_bin'] = data['power_curve_options']['binning']['min']
+        parameters['high_wind_bin']= data['power_curve_options']['binning']['max']
+        parameters['wind_bin_size'] = data['power_curve_options']['binning']['step']
+        
+        # power curve limits
+        parameters['low_quantile'] = data['power_curve_options']['lower_limit_percent']/100
+        parameters['high_quantile'] = data['power_curve_options']['upper_limit_percent']/100
+        
+        # temperature limits
+        parameters['temperature_filter_level'] = data['power_curve_options']['temperature_threshold_C']
+        parameters['icing_alarm_limit'] = 1 #To Be added
+        
+        # other limits
+        parameters['alarm_time_limit'] = 3 #To Be added
+        parameters['minimum_wind_speed'] = 3 #To Be added, give clearer name
+        parameters['stop_limit'] = 100 #To Be added, give clearer name
+        
         return parameters
 
-    except KeyError as e:
-        raise KeyError(
-            f"Missing expected key in JSON structure: {e}"
-        ) from e
-    except Exception as e:
-        raise ImportError(
-            f"Issue while importing turbine parameters: {e}"
-        ) from e
-
+    except:
+        raise ImportError('Issue in the importation of the parameters')
 
 
 #--------------- Main functions -----------------------------
         
 if __name__ == '__main__2':
 
-    json_path_name = DATA_DIR / 'settings_new_format.json'
-    farm_stats = IceLossDetector.compute_wind_farm(DATA_DIR / 'windFarmImport.csv', jsonFileName=json_path_name)
+    json_path_name = Path('app') / 'data'  / 'settings_new_format.json'
+    farm_stats = IceLossDetector.compute_wind_farm('windFarmImport.csv',jsonFileName=json_path_name)
     print(farm_stats)
 
 
@@ -983,8 +775,8 @@ if __name__ == '__main__':
     #possible to add a loop here from the new values of the json file to do an entire wind farm
     #make a constructor for dataframes
     #TODO option to make it year by year, it can be for power curve generation, but also for results (add option to have an annual thing), add option for calendar year or winters (flexible parameter, Jul, Jan, Aug, Sept)
-    json_path_name = Path('data') / 'settings_new_format.json'
-    ice_det = IceLossDetector.importFromCSV(DATA_DIR / "cleaned_file_fake_data2 (other_col_names).csv") #have a constructor that does the whole thing
+    json_path_name = Path('app') / 'data'  / 'settings_new_format.json'
+    ice_det = IceLossDetector.importFromCSV("cleaned_file_fake_data2 (other_col_names).csv") #have a constructor that does the whole thing
     ice_det.addParametersFromJSON(json_path_name)
     ice_det.identifyCleanedDataset() #options to activate those functions or not
     ice_det.makePowerCurve()

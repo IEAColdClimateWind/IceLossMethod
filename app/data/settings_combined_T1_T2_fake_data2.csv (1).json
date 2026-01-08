@@ -1,9 +1,9 @@
 {
     "columns": {
-        "Timestamp": "T",
-        "Wind speed": "WdSpd",
-        "Ambient temperature": "TdegC",
-        "Output Power": "Power",
+        "Timestamp": "Timestamp",
+        "Wind speed": "Wind speed [m/s]",
+        "Ambient temperature": "Ambient temperature [C]",
+        "Output Power": "output power [kW]",
         "Normal Operation": "Status"
     },
     "parameters": {
@@ -55,12 +55,6 @@
                 "key": ""
             }
         }
-    },
-    "turbine_info": {
-        "name": "",
-        "rated_power_kW": "",
-        "hub_height_m": "",
-        "elevation_m": ""
     },
     "power_curve_options": {
         "temperature_threshold_C": 3,

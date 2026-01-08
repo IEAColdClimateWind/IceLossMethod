@@ -56,22 +56,14 @@
             }
         }
     },
-    "turbines_info": [
+    "turbines_info": 
         {
-            "Filename": "cleaned_file_fake_data2 (other_col_names).csv",
-            "Turbine Name": "",
-            "Rated Power [MW]": "",
-            "Elevation [m]": "",
-            "Hub Height [m]": ""
+            "file_name": "cleaned_file_fake_data2 (other_col_names).csv",
+            "turbine_name": "T1",
+            "rated_power": 2000,
+            "elevation": 210,
+            "hub_height": 85
         },
-        {
-            "Filename": "cleaned_file_fake_data2 (other_col_names) copy.csv",
-            "Turbine Name": "",
-            "Rated Power [MW]": "",
-            "Elevation [m]": "",
-            "Hub Height [m]": ""
-        }
-    ],
     "power_curve_options": {
         "temperature_threshold_C": 3,
         "output_path": "output/power_curve",
