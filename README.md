@@ -1,6 +1,15 @@
 # IceLossMethod
 Tooling to compute icing losses from wind turbine SCADA data. Produced by IEA wind tasks 19 and 54.
 
+# Installation
+Running the code requires Python libraries: Dash, Flask, Plotly, Matplotlib, Numpy and Pandas
+requirements can be installed using Conda with
+```
+conda env create -f environment.yml
+```
+This will create a new conda environment with Python 3.13 and the required libraries.
+
+
 
 # IEA Wind
 The International Energy Agency Implementing Agreement for Co-operation
