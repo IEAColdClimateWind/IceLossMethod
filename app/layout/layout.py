@@ -1,19 +1,16 @@
-# === IMPORTS ===
-import dash_bootstrap_components as dbc      # Composants Bootstrap pour Dash (layout responsive, styles)
-import dash_mantine_components as dmc        # Non utilisé ici pour l'instant, mais utile pour des composants avancés
-from dash import dcc, html                   # Composants de base de Dash
+import dash_bootstrap_components as dbc     
+import dash_mantine_components as dmc       
+from dash import dcc, html                   
 
 import pandas as pd
 import base64
 import io
 import csv
 
-# === BARRE DE NAVIGATION EN HAUT ===
 navbar = dbc.NavbarSimple(
     children=[
         dbc.DropdownMenu(
             children=[
-                # Lien vers GitHub du projet (le bouton "About Us" est désactivé pour le moment)
                 dbc.DropdownMenuItem("About Us", disabled=True),
                 dbc.DropdownMenuItem(
                     "Github",
@@ -23,105 +20,228 @@ navbar = dbc.NavbarSimple(
             ],
             nav=True,
             in_navbar=True,
-            label="Options",  # Nom du menu déroulant
+            label="Options",  
         ),
     ],
-    brand="IceLoss19",          # Nom de l’application (en haut à gauche)
-    brand_href="#",             # Lien lorsqu'on clique sur le nom
-    color="primary",            # Couleur de fond de la navbar
-    dark=True                   # Texte clair (blanc)
+    brand="IceLoss19",          
+    brand_href="#",             
+    color="primary",            
+    dark=True                   
 )
 
-# === MISE EN PAGE PRINCIPALE DE L'APPLICATION ===
-layout = html.Div(children=[
+def build_step_1_layout():
+    return html.Div([
 
-    # 1. Navbar
+    ])
+
+layout = dmc.MantineProvider(children=[
     navbar,
-
-    # 2. Titre de bienvenue
     html.H3(
         "Welcome To Your Ice Loss Assesment Tool!",
-        className="my-5 text-center",               # Marges verticales + centré
+        className="my-5 text-center",
         style={'font-weight': 'bold'}
     ),
-
-    # 3. Zone de test (potentiellement temporaire)
-    html.Div(id='test-output'),
-
-    # 4. Zone pour uploader un fichier
-    dbc.Row([
-        dbc.Col(
-            dcc.Upload(
-                id='upload-data',
-                children=html.Div([
-                    'Drag & Drop or ',
-                    html.A('Browse', style={'textDecoration': 'underline'}),
-                    ' csv files.'
-                ]),
-                style={
-                    'height': '100px',
-                    'lineHeight': '100px',
-                    'borderWidth': '1px',
-                    'borderStyle': 'dashed',
-                    'borderRadius': '20px',
-                    'textAlign': 'center',
-                    'background-color': '#f9f9f9'
-                },
-                multiple=True  # Autorise l'upload de plusieurs fichiers
+    dmc.Stepper(
+        id="stepper",
+        active=0,
+        className='mx-3 mt-4 mb-4',
+        children=[
+            # Step 1
+            dmc.StepperStep(
+                # label="Upload and process data",
+                label="Step 1",
+                description="Upload and Process Data",
+                children=[
+                    html.H4(
+                        "Step 1.1. Upload Data",
+                        className="my-4 text-center",               
+                        style={'font-weight': 'bold', 'text-decoration': 'underline'}
+                    ),
+                    dbc.Row([
+                        dbc.Col(
+                            dcc.Upload(
+                                id='upload-data',
+                                children=html.Div([
+                                    'Drag & Drop or ',
+                                    html.A('Browse', style={'textDecoration': 'underline'}),
+                                    ' csv files.'
+                                ]),
+                                style={
+                                    'height': '100px',
+                                    'lineHeight': '100px',
+                                    'borderWidth': '1px',
+                                    'borderStyle': 'dashed',
+                                    'borderRadius': '20px',
+                                    'textAlign': 'center',
+                                    'background-color': '#f9f9f9'
+                                },
+                                multiple=True  
+                            ),
+                            width={"size": 6, "offset": 3}, 
+                        ),
+                    ],
+                    class_name='mt-2'
+                    ),
+                    html.Div(id='uploaded-data-output'),
+                ]
             ),
-            width={"size": 6, "offset": 3},  # Centré sur 6/12 colonnes avec un offset gauche/droite de 3
-        ),
-    ],
-    class_name='mt-5'  # Marge supérieure
+            dmc.StepperStep(
+                # label="Compute Reference Power Curve",
+                label="Step 2",
+                description="Compute Reference Power Curve",
+                children=[
+                    # dbc.Row([
+                    #     dbc.Col(
+                    #         dbc.Checklist(
+                    #             options=[{
+                    #                 "label": "Use temperature corrections",
+                    #                 "value": "use_temp_correction",
+                    #             }],
+                    #             value=[],
+                    #             id="temp-correction-checklist",
+                    #             switch=False,
+                    #         ),
+                    #         width="auto",
+                    #         className="me-5",  # real breathing room
+                    #     ),
+                    #     dbc.Col(
+                    #         dbc.RadioItems(
+                    #             options=[
+                    #                 {
+                    #                     "label": "Use full dataset",
+                    #                     "value": "full_dataset",
+                    #                 },
+                    #                 {
+                    #                     "label": "Reference power curve",
+                    #                     "value": "reference_curve",
+                    #                 },
+                    #             ],
+                    #             value="full_dataset",
+                    #             id="dataset-selection-radio",
+                    #         ),
+                    #         width="auto",
+                    #     ),
+                    # ],
+                    #     justify="center",
+                    #     className="my-3",
+                    # ),
+
+                     html.H4(
+                        "Step 2.1. Import or Filter Points Out of Reference Power Curve",
+                        className="mt-4 text-center",               
+                        style={'font-weight': 'bold', 'text-decoration': 'underline'}
+                    ),
+                   
+                    dcc.Graph(id='time-series-graph'),
+
+                    html.Div(id='currently-selected-points-container-div'),
+                    html.Div(id='all-points-to-filter-out-ref-pc-store-div'),
+
+                    dmc.Group(
+                        justify="center",
+                        mt='xs',
+                        children=[
+                            dcc.Upload(
+                                id='ref-pc-upload',
+                                children=dbc.Button(
+                                    'Import Custom Reference Power Curve',
+                                    id='import-ref-pc', 
+                                    color="secondary",
+                                    outline=True,
+                                    type="button"
+                                ),
+                                accept='.json',
+                                multiple=False,
+                                style={'cursor': 'pointer'}
+                            ),
+                            dmc.Button('Generate Reference Power Curve', id='generate-ref-pc', 
+                                     #  color='green'
+                                       ),
+                            
+                        ],
+                    ),
+
+                    dcc.Graph(id='reference-power-curve-graph'),
+                    
+                   
+                    dmc.Group(
+                        justify="center",
+                        mt='xs',
+                        children=[
+                            dmc.Button('Download Generated Reference Power Curve', id='dl-ref-pc', 
+                                     #  color='green'
+                                       ),
+                            
+                        ],
+                    ),
+
+                    html.H4(
+                        "Step 2.2. Filter Out Unwanted Data",
+                        className="my-4 text-center",               
+                        style={'font-weight': 'bold', 'text-decoration': 'underline'}
+                    ),
+
+                    
+                ],
+            ),
+            dmc.StepperStep(
+                # label="Compute Ice Losses",
+                label="Step 3",
+                description="Compute Ice Losses",
+                children=[
+                     html.H4(
+                        "Step 3.1. Filter Icing Losses Dataset & Compute Losses Statistics",
+                        className="my-4 text-center",               
+                        style={'font-weight': 'bold', 'text-decoration': 'underline'}
+                    ),
+                     dmc.Group(
+                        justify="center",
+                        mt='xs',
+                        children=[
+                            dmc.Button('Compute Icing Losses Power Curve', 
+                                id='compute-icing-losses-btn', 
+                                color='green'
+                            ),
+                        ],
+                    ),
+                    
+                    dcc.Graph(id='icing-losses-power-curve-graph'),
+                    html.Div(id='currently-selected-points-icing-pc-container-div'),
+                    html.Div(id='all-points-to-filter-out-icing-pc-store-div'),
+                    html.Div(id='farm-stats'),
+                    
+                ],
+            ),
+        ],
     ),
+    dmc.Group(
+        justify="center",
+        mt="xl",
+        children=[
+            dmc.Button("Back", id="stepper-back-btn", variant="default"),
+            dmc.Button("Next step", id="stepper-next-btn"),
+        ],
+    ),
+    dmc.Space(h=20),
 
-    # 5. Zone pour afficher les aperçus de fichiers et les dropdowns (remplie par callback)
-    html.Div(id='uploaded-data-output'),
-
-
-
-    # 6. Composant invisible pour permettre le téléchargement de fichier (utilisé par le callback)
     dcc.Download(id="data-to-download"),
     dcc.Download(id="json-download"),
     dcc.Download(id="settings-download"),
     dcc.Download(id="farm-data-download"),
     dcc.Upload(id="settings-upload", style={"display": "none"}),
 
-    # 7. Fichier tampons de json pour setter les clé dynamique
     dcc.Store(id='intermediate-json-config'),
-    dcc.Store(id="cleaned-files-store", storage_type="memory")
+    dcc.Store(id="cleaned-files-store", storage_type="memory"),
+
+    dcc.Store(id="points-to-filter-out-ref-pc-store", storage_type="memory", data=[]),
+    dcc.Store(id="last-selected-points-ref-pc-store", data=None),
+
+    dcc.Store(id="points-to-filter-out-icing-pc-store", storage_type="memory", data=[]),
+    dcc.Store(id="last-selected-points-icing-pc-store", data=None),
     
 ])
 
 
-
-# === COLONNES REQUISES POUR LE TRAITEMENT ===
-REQUIRED_COLUMNS = [
-    'Timestamp',
-    'Wind speed',
-    'Ambient temperature',
-    'Output Power',
-    'Normal Operation'
-]
-
-# === COLONNES OPTIONNELLES ===
-OPTIONAL_OPER_COLUMNS = [
-    "Maintenance",
-    "Faults",
-    "Curtailment",
-    "Other manual",
-]
-
-OPTIONAL_ICING_COLUMNS = [
-    "Icing codes",
-    "Ice detection",
-    "IPS status"
-]
-
-OPTIONAL_COLUMNS_met = [
-    'Wind direction',
-    'Pressure'
-]
 
 
 def clean_column_name(name):
@@ -179,368 +299,3 @@ def parse_contents_into_df(contents, filename):
 
     return df
 
-
-def parse_contents_to_html(contents, filename):
-    """
-    Génère un aperçu HTML à partir d’un fichier uploadé, incluant :
-        - un aperçu des 5 premières lignes du DataFrame,
-        - une série de menus déroulants pour associer les colonnes obligatoires,
-        - un bouton de téléchargement.
-
-    Parameters:
-        - contents : contenu base64 du fichier
-        - filename : nom du fichier
-
-    Returns:
-        - html.Div contenant tous les éléments décrits ci-dessus
-    """
-    # Conversion du fichier en DataFrame
-    df = parse_contents_into_df(contents, filename)
-
-    # Création d’un tableau Bootstrap à partir des 5 premières lignes
-    table = dbc.Table.from_dataframe(
-        df.head(5),
-        striped=True,
-        bordered=True,
-        hover=True
-    )
-
-    # Liste des colonnes présentes dans le fichier importé
-    uploaded_columns = list(df.columns)
-
-    # Création d'un mapping {nom nettoyé : nom original}
-    uploaded_clean_cols_map = {
-        clean_column_name(col): col for col in uploaded_columns
-    }
-
-    dropdowns_units_map_required = {
-        REQUIRED_COLUMNS[0]: html.Div(), # Timestamp, no units
-        REQUIRED_COLUMNS[1]: dbc.Col([
-                dbc.Label("Unit wind speed"),
-                dcc.Dropdown(
-                    id="unit-wind-speed",
-                    options=[
-                        {"label": "m/s", "value": "m/s"},
-                        {"label": "km/h", "value": "kph"},
-                        {"label": "mph", "value": "mph"},
-                    ],
-                    placeholder="Select wind speed unit"
-                ),
-            ], 
-        ),
-        REQUIRED_COLUMNS[2]: dbc.Col([
-                dbc.Label("Unit temperature"),
-                dcc.Dropdown(
-                    id="unit-temperature",
-                    options=[
-                        {"label": "°C", "value": "C"},
-                        {"label": "°F", "value": "F"},
-                        {"label": "K", "value": "K"},
-                    ],
-                    placeholder="Select temperature unit"
-                ),
-            ], 
-        ),
-        REQUIRED_COLUMNS[3]: dbc.Col([
-                dbc.Label("Unit power"),
-                dcc.Dropdown(
-                    id="unit-power",
-                    options=[
-                        {"label": "W", "value": "W"},
-                        {"label": "kW", "value": "kW"},
-                        {"label": "MW", "value": "MW"},
-                    ],
-                    placeholder="Select power unit"
-                ),
-            ], 
-        ),
-        REQUIRED_COLUMNS[4]: dbc.Col([
-                dbc.Label("Normal Operation key"),
-                # dbc.Input(id="normal-operation-key", type="text", placeholder="Enter key"),
-                dcc.Dropdown(
-                    id="normal-operation-key",
-                    placeholder="Enter key"
-                ),
-
-            ],
-        )
-    }
-
-    dropdowns_units_map_optional = {
-        OPTIONAL_COLUMNS_met[0]: dbc.Col([
-            #dbc.Label("Unit wind direction"),
-            dcc.Dropdown(
-                id="unit-wind-direction",
-                options=[
-                    {"label": "°", "value": "Deg"},
-                    {"label": "radian", "value": "Radian"},
-                ],
-                placeholder="Select wind direction unit"
-            ),
-        ],
-        ),
-        OPTIONAL_COLUMNS_met[1]: dbc.Col([
-            #.Label("Unit pressure"),
-            dcc.Dropdown(
-                id="unit-pressure",
-                options=[
-                    {"label": "Pa", "value": "Pa"},
-                    {"label": "hPa", "value": "hPa"},
-                    {"label": "kPa", "value": "kPa"},
-                    {"label": "atm", "value": "atm"},
-                    {"label": "bar", "value": "bar"},
-                    {"label": "PSI", "value": "PSI"},
-                ],
-                placeholder="Select pressure unit"
-            ),
-        ],
-        )
-    }
-
-    dropdowns = []  # Liste des menus déroulants
-
-    # Pour chaque colonne requise, créer un menu déroulant pour faire le mapping
-    for required_col in REQUIRED_COLUMNS:
-        # Essayer d'identifier une colonne correspondante automatiquement
-        matched_col = uploaded_clean_cols_map.get(clean_column_name(required_col), None)
-
-        # Crée une colonne Bootstrap contenant un label + un dropdown
-        dropdown_col = dbc.Col(
-            [
-                html.Div(required_col, style={'fontWeight': 'bold'}),
-                dcc.Dropdown(
-                    id={'type': 'column-mapper', 'index': required_col},  # ID dynamique pour callback
-                    options=[{'label': c, 'value': c} for c in uploaded_columns],  # Choix disponibles
-                    placeholder=f"Select uploaded col name for {required_col}",
-                    value=matched_col  # Préremplissage désactivé pour le moment
-                ),
-                dropdowns_units_map_required[required_col]
-            ],
-            className="mb-3"  # Marge en bas
-        )
-
-        dropdowns.append(dropdown_col)
-
-    # Adding optional parameters
-    dropdowns.append(
-        html.H5("Select the optional columns:", style={'fontWeight': 'bold', 'textDecoration': 'underline'})
-    )
-
-    dropdowns.append(
-        dbc.Accordion([
-            # Bloc pour les colonnes météo
-            dbc.AccordionItem(
-                children=[
-                    html.H6("Meteorological (optional)", className="mt-2"),
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div(col, style={'fontWeight': 'bold'}),
-                            dcc.Dropdown(
-                                # id={'type': 'column-mapper_oper', 'index': col},
-                                id='column-mapper-met-' + col,
-                                options=[{'label': c, 'value': c} for c in uploaded_columns],
-                                placeholder=f"Select uploaded col name for {col}",
-                            ),
-                            dbc.Label("Unit " + col.lower()),
-                            dropdowns_units_map_optional.get(col, html.Div())
-                            #dcc.Dropdown(
-                            #    # id={'type': 'column-key-oper', 'index': col},
-                            #    id='column-key-oper-' + col,
-                            #    options=[],
-                            #    placeholder=f"Choose key",
-                            #),
-                        ], width=6)  # if len(OPTIONAL_OPER_COLUMNS) == 2 else 4)  # Ajuste largeur selon le nombre
-                        for col in OPTIONAL_COLUMNS_met
-                    ])
-                ],
-                title=html.Span("Click to expand: Meteorological", style={'textDecoration': 'underline'}),
-                item_id="accordion-met"
-            ),
-
-            # Bloc pour les colonnes opérationnelles
-            dbc.AccordionItem(
-                children=[
-                    html.H6("Wind Turbine Operation (optional)", className="mt-2"),
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div(col, style={'fontWeight': 'bold'}),
-                            dcc.Dropdown(
-                                #id={'type': 'column-mapper_oper', 'index': col},
-                                id = 'column-mapper-oper-' + col,
-                                options=[{'label': c, 'value': c} for c in uploaded_columns],
-                                placeholder=f"Select uploaded col name for {col}",
-                            ),
-                            dbc.Label(col  + " key"),
-                            dcc.Dropdown(
-                                #id={'type': 'column-key-oper', 'index': col},
-                                id='column-key-oper-' + col,
-                                options=[],
-                                placeholder=f"Choose key",
-                            ),
-                        ], width=6)# if len(OPTIONAL_OPER_COLUMNS) == 2 else 4)  # Ajuste largeur selon le nombre
-                        for col in OPTIONAL_OPER_COLUMNS
-                    ])
-                ],
-                title=html.Span("Click to expand: Wind turbine operation", style={'textDecoration': 'underline'}),
-                item_id="accordion-operation"
-            ),
-
-            # Bloc pour les colonnes de givre
-            dbc.AccordionItem(
-                children=[
-                    html.H6("Icing Flags (optional)", className="mt-2"),
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div(col, style={'fontWeight': 'bold'}),
-                            dcc.Dropdown(
-                                id="column-mapper-icing-" + col,
-                                options=[{'label': c, 'value': c} for c in uploaded_columns],
-                                placeholder=f"Select uploaded col name for {col}",
-                            ),
-                            dbc.Label(col  + " key"),
-                            dcc.Dropdown(
-                                id='column-key-icing-' + col,
-                                options=[],
-                                placeholder=f"Choose key",
-                            )
-                        ], width=6 if len(OPTIONAL_ICING_COLUMNS) == 2 else 4)
-                        for col in OPTIONAL_ICING_COLUMNS
-                    ])
-                ],
-                title=html.Span("Click to expand: Icing flags", style={'textDecoration': 'underline'}),
-                item_id="accordion-icing"
-            ),
-        ],
-            id="accordion-advanced-options",
-            active_item=None  # Aucun ouvert par défaut
-        )
-    )
-
-    # Retourne le bloc complet : nom du fichier + tableau + mapping + bouton
-    return html.Div([
-  
-        table,  # Aperçu tableau
-        dbc.Row([
-            dbc.Col([
-                dcc.Upload(
-                    id='settings-upload',
-                    children=dbc.Button("Load Metadata", id="load-settings-btn", color="secondary"),
-                    accept='.json',
-                    multiple=False,
-                    style={'cursor': 'pointer'}
-                ),
-            ], width="auto"),
-        ],
-            justify='start',
-            className="my-3"
-        ),
-
-        html.H5(html.Span("Select the corresponding columns*: ", style={'fontWeight': 'bold', 'textDecoration': 'underline'})),
-        dbc.Row(dropdowns, className="mt-4"),  # Menus dropdown pour associer les colonnes
-
-        # Ligne d'alerte
-        dbc.Alert(id='missing-columns-alert', color='danger', is_open=False),
-
-        # Ligne des boutons
-        dbc.Row([
-            dbc.Col(
-                dbc.Button("Download Clean Files", id='download-clean-files', color="primary"),
-                width="auto"
-            ),
-        ],
-            justify='center',
-            className="my-3"
-        ),
-
-        # Add optional columns
-        html.H5(html.Span("Select the corresponding parameters*: ",
-                          style={'fontWeight': 'bold', 'textDecoration': 'underline'})),
-        # Zone des paramètres supplémentaires
-        dbc.Accordion([
-            # --- Bloc 1 : Turbine Information ---
-            dbc.AccordionItem(
-                children=[
-                    html.H6("Turbine information", className="mt-2"),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Label("Name"),
-                            dbc.Input(id='turbine-name', type='text', placeholder="Enter turbine name"),
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Label("Rated power (kW)"),
-                            dbc.Input(id='rated-power', type='number', placeholder="e.g., 800"),
-                        ], width=6),
-                    ]),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Label("Hub height (m)"),
-                            dbc.Input(id='hub-height', type='number', placeholder="e.g., 50"),
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Label("Elevation (m)"),
-                            dbc.Input(id='elevation', type='number', placeholder="e.g., 10"),
-                        ], width=6),
-                    ]),
-                ],
-                title=html.Span("Turbine information", style={'textDecoration': 'underline'}),
-                item_id="accordion-turbine-info"
-            ),
-
-            # --- Bloc 2 : Power Curve Options ---
-            dbc.AccordionItem(
-                children=[
-                    html.H6("Power curves option", className="mt-2"),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Label("Temperature threshold (°C)"),
-                            dbc.Input(id='temperature-threshold', type='number', value=3),
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Label("Output pathfile"),
-                            dbc.Input(id='output-path', type='text', value="output/power_curve"),
-                        ], width=6),
-                    ]),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Label("Lower percentage limit (%)"),
-                            dbc.Input(id='lower-limit', type='number', value=10),
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Label("Higher percentage limit (%)"),
-                            dbc.Input(id='upper-limit', type='number', value=90),
-                        ], width=6),
-                    ]),
-                    html.Div([
-                        dbc.Label("Binning option", className="mt-3"),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Min value"),
-                                dbc.Input(id='binning-min', type='number', value=0),
-                            ], width=4),
-                            dbc.Col([
-                                dbc.Label("Max value"),
-                                dbc.Input(id='binning-max', type='number', value=30),
-                            ], width=4),
-                            dbc.Col([
-                                dbc.Label("Increment value"),
-                                dbc.Input(id='binning-step', type='number', value=1),
-                            ], width=4),
-                        ])
-                    ])
-                ],
-                title=html.Span("Power curves option", style={'textDecoration': 'underline'}),
-                item_id="accordion-power-curves"
-            )
-        ], start_collapsed=True),
-
-        # Bouton de téléchargement JSON
-        dbc.Row([
-            dbc.Col(
-                dbc.Button("Download Metadata (JSON)", id='download-json-btn', color="secondary", type="button"),
-                width="auto"
-            )
-        ], justify='center', className="mb-4"),
-
-        dcc.Graph(id='power-curve-graph'),
-        dcc.Graph(id='time-series-graph'),
-    ])

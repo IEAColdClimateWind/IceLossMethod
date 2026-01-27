@@ -7,63 +7,55 @@
         "Normal Operation": "Status"
     },
     "parameters": {
-        "unit_wind_speed": null,
-        "unit_power": null,
-        "unit_temperature": null,
+        "unit_wind_speed": "m/s",
+        "unit_power": "kW",
+        "unit_temperature": "C",
         "normal_operation_key": "OK"
     },
     "optional_columns": {
         "meteorological": {
             "Wind direction": {
-                "column": null,
-                "unit": null
+                "column": "",
+                "unit": ""
             },
             "Pressure": {
-                "column": null,
-                "unit": null
+                "column": "",
+                "unit": ""
             }
         },
         "operation": {
             "Maintenance": {
-                "column": null,
-                "key": null
+                "column": "",
+                "key": ""
             },
             "Faults": {
-                "column": null,
-                "key": null
+                "column": "",
+                "key": ""
             },
             "Curtailment": {
-                "column": null,
-                "key": null
+                "column": "",
+                "key": ""
             },
             "Other manual": {
-                "column": null,
-                "key": null
+                "column": "",
+                "key": ""
             }
         },
         "icing": {
             "Icing codes": {
-                "column": null,
-                "key": null
+                "column": "",
+                "key": ""
             },
             "Ice detection": {
-                "column": null,
-                "key": null
+                "column": "Ice detected",
+                "key": "YES"
             },
             "IPS status": {
-                "column": null,
-                "key": null
+                "column": "IPS",
+                "key": "ON"
             }
         }
     },
-    "turbines_info": 
-        {
-            "file_name": "cleaned_file_fake_data2 (other_col_names).csv",
-            "turbine_name": "T1",
-            "rated_power": 2000,
-            "elevation": 210,
-            "hub_height": 85
-        },
     "power_curve_options": {
         "temperature_threshold_C": 3,
         "output_path": "output/power_curve",

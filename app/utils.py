@@ -1,15 +1,12 @@
-# === IMPORTS ===
 import pandas as pd
 import base64
 import io
 import csv
-import json
 
-# Dash components pour affichage
 from dash import html, dcc, ctx, dash_table
 import dash_bootstrap_components as dbc
+import dash_mantine_components as dmc  
 
-# === COLONNES REQUISES POUR LE TRAITEMENT ===
 REQUIRED_COLUMNS = [
     'Timestamp',
     'Wind speed',
@@ -18,7 +15,6 @@ REQUIRED_COLUMNS = [
     'Normal Operation'
 ]
 
-# === COLONNES OPTIONNELLES ===
 OPTIONAL_OPER_COLUMNS = [
     "Maintenance",
     "Faults",
@@ -90,6 +86,10 @@ def parse_contents_into_df(contents, filename):
     except Exception as e:
         print(f"Erreur de lecture du fichier {filename}: {e}")
         df = pd.DataFrame()
+
+    # Check if any column named 'id' exists, case-insensitive
+    if "id" not in (c.lower() for c in df.columns):
+        df["ID"] = "T1"
 
     return df
 
@@ -237,7 +237,7 @@ def parse_contents_to_html(contents, filename, prefilled_farm_dash_table = None)
 
     # Adding optional parameters
     dropdowns.append(
-        html.H5("Select the optional columns:", style={'fontWeight': 'bold', 'textDecoration': 'underline'})
+        html.H5("Select the optional columns:", style={'fontWeight': 'bold', })
     )
 
     dropdowns.append(
@@ -336,42 +336,46 @@ def parse_contents_to_html(contents, filename, prefilled_farm_dash_table = None)
         # Table header container
         html.Div(id='selected-turbine-csv-head-container', children=[table]),
 
-        dbc.Row([
-            dbc.Col([
-                dcc.Upload(
-                    id='settings-upload',
-                    children=dbc.Button("Load Metadata", id="load-settings-btn", color="secondary"),
-                    accept='.json',
-                    multiple=False,
-                    style={'cursor': 'pointer'}
-                ),
-            ], width="auto"),
+        html.H4(
+            "Step 1.2. Map the columns' names/units or Load settings.json",
+            className="my-4 text-center",               
+            style={'font-weight': 'bold', 'text-decoration': 'underline'}
+        ),
 
-        ],
-            justify='start',
+        dbc.Row([
+            dbc.Col(
+                dcc.Upload(
+                    id="settings-upload",
+                    children=dmc.Button(
+                        "Load settings.json",
+                        id="load-settings-btn",
+                        # color="secondary",
+                        # outline=True,
+                    ),
+                    accept=".json",
+                    multiple=False,
+                ),
+                width="auto",
+                className="me-2"
+            ),
+            ],
+            justify="center",
             className="my-3"
         ),
 
-        html.H5(html.Span("Select the corresponding columns*: ", style={'fontWeight': 'bold', 'textDecoration': 'underline'})),
+      
+
+        html.H5(html.Span("Select the corresponding columns: ", style={'fontWeight': 'bold',})),
         dbc.Row(dropdowns, className="mt-4"),  # Menus dropdown pour associer les colonnes
 
         # Ligne d'alerte
         dbc.Alert(id='missing-columns-alert', color='danger', is_open=False),
 
-        # Ligne des boutons
-        dbc.Row([
-            dbc.Col(
-                dbc.Button("Download Clean Files", id='download-clean-files-btn', color="primary"),
-                width="auto"
-            ),
-        ],
-            justify='center',
-            className="my-3"
-        ),
-
+        
+        dmc.Space(h=10),
         # Add optional columns
-        html.H5(html.Span("Select the corresponding parameters*: ",
-                          style={'fontWeight': 'bold', 'textDecoration': 'underline'})),
+        html.H5(html.Span("Select the corresponding parameters: ",
+                          style={'fontWeight': 'bold',})),
         # Zone des paramètres supplémentaires
         dbc.Accordion([
             # --- Bloc 1 : Turbine Information ---
@@ -457,17 +461,37 @@ def parse_contents_to_html(contents, filename, prefilled_farm_dash_table = None)
             )
         ], start_collapsed=True),
 
-        # Bouton de téléchargement JSON
+
+        html.H4(
+              "Step 1.3. Generate the Cleaned Dataset",
+              className="my-4 text-center",               
+              style={'font-weight': 'bold', 'text-decoration': 'underline'}
+        ),
+
         dbc.Row([
             dbc.Col(
-                dbc.Button("Download Metadata (JSON)", id='download-json-btn', color="secondary", type="button"),
+                dbc.Button(
+                    "Download settings.json",
+                    id="download-json-btn",
+                    color="secondary",
+                    outline=True,
+                    type="button"
+                ),
                 width="auto"
-            )
-        ], justify='center', className="mb-4"),
+            ),
+            dbc.Col(
+                dbc.Button("Generate Clean Dataset", id='download-clean-files-btn', color="primary"),
+                width="auto"
+            ),
+            ],
+            justify="center",
+            className="mt-3"
+        ),
 
-        dcc.Graph(id='power-curve-graph'),
-        dcc.Graph(id='time-series-graph'),
-        html.Div(id='farm-stats'),
+        html.Div(style={'height': '20px'}),
+
+
+        
     ])
 
 

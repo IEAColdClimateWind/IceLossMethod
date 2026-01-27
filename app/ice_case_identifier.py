@@ -115,7 +115,7 @@ class IceLossDetector(pd.DataFrame):
         out.index.name = self.index.name
         return out                 
 
-    def temperatureCorrection(self):
+    def applyTemperatureCorrection(self):
         if not self.temperatureCorrectionApplied:
             kelvin = 273.15
             temp_std = 288.15
@@ -241,12 +241,18 @@ class IceLossDetector(pd.DataFrame):
                         o    Some kind of diagnostic of the quality of the power curve (To be implemented)
 
         """
-        self.temperatureCorrection()
+        self.applyTemperatureCorrection()
         if 'cleanedDatasetMask' not in self.columns:
             self.identifyCleanedDataset()
         reference_dataset = self.loc[self.loc[:,'cleanedDatasetMask'],:]
+
+        print(f'len(reference_dataset) = {len(reference_dataset)}')
         # this needs to be settable
-        wind_bins = pd.interval_range(start=self.parameters['low_wind_bin'], end=self.parameters['high_wind_bin'], freq=self.parameters['wind_bin_size'])
+        wind_bins = pd.interval_range(
+            start=self.parameters['low_wind_bin'], 
+            end=self.parameters['high_wind_bin'], 
+            freq=self.parameters['wind_bin_size']
+        )
         # create binning for the dataset based on the corrected wind speed
         binning = pd.cut(reference_dataset['wind_speed_c'],bins=wind_bins)
         binning_r = binning.rename("bin")
@@ -281,7 +287,7 @@ class IceLossDetector(pd.DataFrame):
         if self.powerCurve is None:
             AttributeError('The power curve has not been computed, please compute it using makePowerCurve()')
         pc = self.powerCurve
-        self.temperatureCorrection()
+        self.applyTemperatureCorrection()
         # interpoaltion cannot handle NaN
         pc_mask = ~(np.isnan(pc['windSpeedMean']))
         # piecewise linear interpolation over the power curves to get the refrence values for alarm creation
@@ -567,7 +573,7 @@ class IceLossDetector(pd.DataFrame):
         """
         run the correct sequence of functions and return the dataframe with icign events
         """
-        self.temperatureCorrection()
+        self.applyTemperatureCorrection()
         self.identifyCleanedDataset()
         self.makePowerCurve() #TODO find a way to manually add a power curve, you can skip this step if you have reference power low and high quantile
         self.addExpectedPowerToData()
@@ -609,7 +615,8 @@ class IceLossDetector(pd.DataFrame):
 
 
 
-    def plot_plotly_power_curves(self):
+    
+    def plot_plotly_power_curves_with_icing(self):
         if self.powerCurve is None:
             raise AttributeError(
                 "The power curve has not been computed. Call makePowerCurve() first."
@@ -617,63 +624,100 @@ class IceLossDetector(pd.DataFrame):
 
         pc = self.powerCurve
 
+        if isinstance(self.index, pd.DatetimeIndex):
+            ts = self.index
+        elif "timestamp" in self.columns:
+            ts = self["timestamp"]
+        else:
+            ts = None
+
         fig = go.Figure()
+
+        cond_cols = [
+            "maintenance",
+            "faults",
+            "curtailment",
+            "icing_codes",
+            "ice_detection",
+            "ips_status",
+            "other_manual",
+            "iceLossMask",   
+        ]
+
+        # ---- build "none of the conditions" mask ----
+        present_cond_cols = [c for c in cond_cols if c in self.columns]
+        if present_cond_cols:
+            any_cond = np.logical_or.reduce([self[c].to_numpy(dtype=bool) for c in present_cond_cols])
+            mask_none = ~any_cond
+        else:
+            # if none of those columns exist, everything is "normal"
+            mask_none = np.ones(len(self), dtype=bool)
+
+        # ---- Normal operation trace (none of the conditions true) ----
+        if mask_none.any():
+            fig.add_trace(
+                go.Scatter(
+                    x=self.loc[mask_none, "wind_speed_c"],
+                    y=self.loc[mask_none, "output_power"],
+                    mode="markers",
+                    name="Normal Operation",
+                    marker=dict(color="gray", opacity=0.1),
+                    customdata=ts[mask_none],
+                )
+            )
+
+        # ---- One trace per condition column ----
+        for c in present_cond_cols:
+            # special-case iceLossMask if it's 0/1 not boolean
+            if c == "iceLossMask":
+                mask = (self[c] == 1).to_numpy()
+                trace_name = "Icing losses"  
+            else:
+                mask = self[c].to_numpy(dtype=bool)
+                trace_name = c
+
+            if mask.any():
+                fig.add_trace(
+                    go.Scatter(
+                        x=self.loc[mask, "wind_speed_c"],
+                        y=self.loc[mask, "output_power"],
+                        mode="markers",
+                        name=trace_name,
+                        marker=dict(opacity=0.3),
+                        customdata=ts[mask_none],
+                    )
+                )
 
         # ---- Power curve lines ----
         fig.add_trace(
             go.Scatter(
-                x=pc['windSpeedMean'],
-                y=pc['outputPowerMean'],
-                mode="lines",
-                name="Mean power curve",
-            )
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=pc['windSpeedMean'],
-                y=pc['outputPowerLowQuantile'],
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerLowQuantile"],
                 mode="lines",
                 name="Low quantile",
                 line=dict(dash="dash"),
             )
         )
-
         fig.add_trace(
             go.Scatter(
-                x=pc['windSpeedMean'],
-                y=pc['outputPowerHighQuantile'],
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerHighQuantile"],
                 mode="lines",
                 name="High quantile",
                 line=dict(dash="dash"),
             )
         )
-
-        # ---- All points ----
         fig.add_trace(
             go.Scatter(
-                x=self["wind_speed_c"],
-                y=self["output_power"],
-                mode="markers",
-                name="All points",
-                marker=dict(color="gray", opacity=0.1),
-            )
-        )
-
-        # ---- Icing losses ----
-        icing_mask = self["iceLossMask"] == 1
-        fig.add_trace(
-            go.Scatter(
-                x=self.loc[icing_mask, "wind_speed_c"],
-                y=self.loc[icing_mask, "output_power"],
-                mode="markers",
-                name="Icing losses",
-                marker=dict(color="red", opacity=0.3),
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerMean"],
+                mode="lines",
+                name="Mean power curve",
             )
         )
 
         fig.update_layout(
-            title=f"Power curve: {self.parameters['turbine_name']}",
+            title=f"Power curve: {self.parameters.get('turbine_name', '')}",
             xaxis_title="Wind speed (corrected)",
             yaxis_title="Power output",
             legend_title="Legend",
@@ -927,7 +971,7 @@ def read_json_parameters(json_source):
     # ---------- Parse Parameters ----------
     try:
         parameters = {}
-        turbine_info = data.get("turbines_info", [])
+        turbine_info = data.get("turbines_info", {})
 
         #Might be changed with micheal change of the json format
         parameters['turbine_name'] = turbine_info.get("turbine_name","unnamed_turbine")
