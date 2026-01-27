@@ -540,11 +540,11 @@ class IceLossDetector(pd.DataFrame):
             statistics.loc[periodStart,"reduced_production_loss"]   = periodDF.computeTotalIcingReducedProductionLosses() #float(np.round(reduced_prod_events["production_loss"].sum(),0))
             statistics.loc[periodStart,"icing_stop_loss"]           = periodDF.computeTotalIcingStandstillLosses() #float(np.round(stops_events["production_loss"].sum(),0))
             # losses in % of total production not neccessarily AEP
-            statistics.loc[periodStart,"total_icing_share"]         = float(np.round(statistics.loc[periodStart,"total_icing_loss"] / 
+            statistics.loc[periodStart,"total_icing_loss_share"]         = float(np.round(statistics.loc[periodStart,"total_icing_loss"] / 
                                                                           statistics.loc[periodStart,"total_expected_production"],2))
-            statistics.loc[periodStart,"reduced_producion_share"]   = float(np.round(statistics.loc[periodStart,"reduced_production_loss"] / 
+            statistics.loc[periodStart,"reduced_producion_loss_share"]   = float(np.round(statistics.loc[periodStart,"reduced_production_loss"] / 
                                                                           statistics.loc[periodStart,"total_expected_production"],2))
-            statistics.loc[periodStart,"icing_stop_share"]          = float(np.round(statistics.loc[periodStart,"icing_stop_loss"] /
+            statistics.loc[periodStart,"icing_stop_loss_share"]          = float(np.round(statistics.loc[periodStart,"icing_stop_loss"] /
                                                                           statistics.loc[periodStart,"total_expected_production"],2))
             
             # other status variables again, cant count form timestamps so number of hours is number of lines * 1/6:
