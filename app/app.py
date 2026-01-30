@@ -19,6 +19,8 @@ from ice_case_identifier import IceLossDetector
 from layout import layout 
 from utils import *  
 
+from io import StringIO
+
 server = flask.Flask(__name__)  
 
 app = Dash(
@@ -473,7 +475,7 @@ def capture_last_selection(power_selected, ts_selected, cleaned_files_store, sel
     if not trigger:
         return no_update
 
-    df = pd.read_json(cleaned_files_store[selected_filename], orient="split")
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]), orient="split")
 
     if "id" not in df.columns:
         # can't filter properly
@@ -522,7 +524,7 @@ def capture_last_selection(power_selected,
     if not trigger:
         return no_update
 
-    df = pd.read_json(cleaned_files_store[selected_filename], orient="split")
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]), orient="split")
 
     if "id" not in (c.lower() for c in df.columns):
         # can't filter properly
@@ -568,7 +570,7 @@ def mark_other_manual(points_to_filter_ref_pc_sets, points_to_filter_icing_pc_se
     if not cleaned_files_store or not selected_filename:
         return no_update
 
-    df = pd.read_json(cleaned_files_store[selected_filename], orient="split")
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]), orient="split")
 
     if "id" not in df.columns:
         # can't filter properly
@@ -795,8 +797,8 @@ def update_power_curve(
         return None, []
 
 
-    df = pd.read_json(
-        cleaned_files_store[selected_file_name],
+    df = pd.read_json(StringIO(
+        cleaned_files_store[selected_file_name]),
         orient="split"
     )
 
@@ -852,8 +854,8 @@ def update_time_series(
     if not (selected_file_name and cleaned_files_store):
         return fig_ts
 
-    df = pd.read_json(
-        cleaned_files_store[selected_file_name],
+    df = pd.read_json(StringIO(
+        cleaned_files_store[selected_file_name]),
         orient="split",
     )
 
@@ -941,8 +943,8 @@ def update_reference_power_curve(
     if not (selected_file_name and cleaned_files_store):
         return fig_pc
 
-    df = pd.read_json(
-        cleaned_files_store[selected_file_name],
+    df = pd.read_json(StringIO(
+        cleaned_files_store[selected_file_name]),
         orient="split",
     )
 
