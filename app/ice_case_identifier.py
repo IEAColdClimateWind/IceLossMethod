@@ -244,9 +244,9 @@ class IceLossDetector(pd.DataFrame):
         self.applyTemperatureCorrection()
         if 'cleanedDatasetMask' not in self.columns:
             self.identifyCleanedDataset()
-        reference_dataset = self.loc[self.loc[:,'cleanedDatasetMask'],:]
+        reference_dataset = self[self["cleanedDatasetMask"]]
 
-        print(f'len(reference_dataset) = {len(reference_dataset)}')
+
         # this needs to be settable
         wind_bins = pd.interval_range(
             start=self.parameters['low_wind_bin'], 

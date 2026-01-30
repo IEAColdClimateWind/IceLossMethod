@@ -242,6 +242,31 @@ def parse_contents_to_html(contents, filename, prefilled_farm_dash_table = None)
 
     dropdowns.append(
         dbc.Accordion([
+            # Bloc pour les colonnes de givre
+            dbc.AccordionItem(
+                children=[
+                    html.H6("Icing Flags (optional)", className="mt-2"),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Div(col, style={'fontWeight': 'bold'}),
+                            dcc.Dropdown(
+                                id="column-mapper-icing-" + col,
+                                options=[{'label': c, 'value': c} for c in uploaded_columns],
+                                placeholder=f"Select uploaded col name for {col}",
+                            ),
+                            dbc.Label(col  + " key"),
+                            dcc.Dropdown(
+                                id='column-key-icing-' + col,
+                                options=[],
+                                placeholder=f"Choose key",
+                            )
+                        ], width=6 if len(OPTIONAL_ICING_COLUMNS) == 2 else 4)
+                        for col in OPTIONAL_ICING_COLUMNS
+                    ])
+                ],
+                title=html.Span("Click to expand: Icing flags", style={'textDecoration': 'underline'}),
+                item_id="accordion-icing"
+            ),
             # Bloc pour les colonnes météo
             dbc.AccordionItem(
                 children=[
@@ -299,31 +324,7 @@ def parse_contents_to_html(contents, filename, prefilled_farm_dash_table = None)
                 item_id="accordion-operation"
             ),
 
-            # Bloc pour les colonnes de givre
-            dbc.AccordionItem(
-                children=[
-                    html.H6("Icing Flags (optional)", className="mt-2"),
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div(col, style={'fontWeight': 'bold'}),
-                            dcc.Dropdown(
-                                id="column-mapper-icing-" + col,
-                                options=[{'label': c, 'value': c} for c in uploaded_columns],
-                                placeholder=f"Select uploaded col name for {col}",
-                            ),
-                            dbc.Label(col  + " key"),
-                            dcc.Dropdown(
-                                id='column-key-icing-' + col,
-                                options=[],
-                                placeholder=f"Choose key",
-                            )
-                        ], width=6 if len(OPTIONAL_ICING_COLUMNS) == 2 else 4)
-                        for col in OPTIONAL_ICING_COLUMNS
-                    ])
-                ],
-                title=html.Span("Click to expand: Icing flags", style={'textDecoration': 'underline'}),
-                item_id="accordion-icing"
-            ),
+            
         ],
             id="accordion-advanced-options",
             active_item=None  # Aucun ouvert par défaut
