@@ -1,5 +1,5 @@
 import base64
-import io
+from io import BytesIO, StringIO
 import zipfile
 from time import sleep
 import json
@@ -24,7 +24,7 @@ server = flask.Flask(__name__)
 app = Dash(
     __name__,
     server=server,
-    title='IceLoss 19',
+    title='Ice Loss Method 3.0',
     update_title='Updating...', 
     external_stylesheets=[dbc.themes.YETI], 
     suppress_callback_exceptions=True
@@ -463,22 +463,15 @@ def render_current_selection(last_selected):
     Output("last-selected-points-ref-pc-store", "data"),
     Input("reference-power-curve-graph", "selectedData"),
     Input("time-series-graph", "selectedData"),
-    State("cleaned-files-store", "data"),
-    State("selected-filename", "value"),
-    State("selected-turbine", "value"),
     prevent_initial_callback=True,
 )
-def capture_last_selection(power_selected, ts_selected, cleaned_files_store, selected_filename, selected_turbine, ):
+def capture_last_selection(power_selected, ts_selected):
     trigger = ctx.triggered_id  
     if not trigger:
         return no_update
 
-    df = pd.read_json(cleaned_files_store[selected_filename], orient="split")
-
-    if "id" not in df.columns:
-        # can't filter properly
+    if not ts_selected and not power_selected:
         return no_update
-  
 
     selected_data = power_selected if trigger == "reference-power-curve-graph" else ts_selected
     points = (selected_data or {}).get("points") or []
@@ -510,26 +503,13 @@ def capture_last_selection(power_selected, ts_selected, cleaned_files_store, sel
     Output("last-selected-points-icing-pc-store", "data"),
     Input("icing-losses-power-curve-graph", "selectedData"),
     #Input("time-series-graph", "selectedData"),
-    State("cleaned-files-store", "data"),
-    State("selected-filename", "value"),
-    State("selected-turbine", "value"),
     prevent_initial_callback=True,
 )
-def capture_last_selection(power_selected, 
-                           #ts_selected, 
-                           cleaned_files_store, selected_filename, selected_turbine, ):
+def capture_last_selection(power_selected,  ):
     trigger = ctx.triggered_id  
     if not trigger:
         return no_update
-
-    df = pd.read_json(cleaned_files_store[selected_filename], orient="split")
-
-    if "id" not in (c.lower() for c in df.columns):
-        # can't filter properly
-        print('NO ID !')
-        return no_update
   
-
     selected_data = power_selected if trigger == "icing-losses-power-curve-graph" else [] # else ts_selected
     points = (selected_data or {}).get("points") or []
 
@@ -568,7 +548,7 @@ def mark_other_manual(points_to_filter_ref_pc_sets, points_to_filter_icing_pc_se
     if not cleaned_files_store or not selected_filename:
         return no_update
 
-    df = pd.read_json(cleaned_files_store[selected_filename], orient="split")
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
 
     if "id" not in df.columns:
         # can't filter properly
@@ -579,7 +559,7 @@ def mark_other_manual(points_to_filter_ref_pc_sets, points_to_filter_icing_pc_se
         df["other_manual"] = False
 
     # Filter to selected turbine (keep original df index labels)
-    # dff = df[df["id"] == selected_turbine]
+    dff = df[df["id"] == selected_turbine]
 
     if df.empty:
         return cleaned_files_store
@@ -786,19 +766,16 @@ def render_all_filtered_point_sets(store_data):
 )
 def update_power_curve(
     n_clicks,
-    selected_file_name,
+    selected_filename,
     selected_turbine,
     config_json_str,
     cleaned_files_store,
 ):
-    if not n_clicks or not selected_file_name or not cleaned_files_store:
+    if not n_clicks or not selected_filename or not cleaned_files_store:
         return None, []
 
 
-    df = pd.read_json(
-        cleaned_files_store[selected_file_name],
-        orient="split"
-    )
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
 
 
     if selected_turbine and "id" in df.columns:
@@ -842,20 +819,17 @@ def update_power_curve(
     prevent_initial_call=True,
 )
 def update_time_series(
-    selected_file_name,
+    selected_filename,
     selected_turbine,
     cleaned_files_store,
     config_json_str,
 ):
     fig_ts = go.Figure()
 
-    if not (selected_file_name and cleaned_files_store):
+    if not (selected_filename and cleaned_files_store):
         return fig_ts
 
-    df = pd.read_json(
-        cleaned_files_store[selected_file_name],
-        orient="split",
-    )
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
 
     # Filter turbine
     if selected_turbine and "id" in df.columns:
@@ -863,52 +837,58 @@ def update_time_series(
     else:
         dff = df
 
+    
+
     required_cols = {"timestamp", "output_power", "wind_speed"}
     if not required_cols.issubset(dff.columns):
         print("Missing required columns:", required_cols - set(dff.columns))
         return fig_ts
 
-    cond_cols = [
-        "maintenance",
-        "faults",
-        "curtailment",
-        "icing_codes",
-        "ice_detection",
-        "ips_status",
-        "other_manual",
-    ]
+    ice_loss_detector = IceLossDetector(dff)
+    ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
 
-    # ---- masks (unchanged)
-    any_cond = np.logical_or.reduce(
-        [dff[c].to_numpy() for c in cond_cols]
+    ice_loss_detector.identifyCleanedDataset()
+
+    
+
+    # Boolean masks
+    mask_clean = ice_loss_detector["cleanedDatasetMask"]
+    mask_not_clean = ~mask_clean
+
+    fig_ts.add_trace(
+        go.Scatter(
+            x=ice_loss_detector.loc[mask_clean, "timestamp"],
+            y=ice_loss_detector.loc[mask_clean, "output_power"],
+            mode="markers",
+            name="Reference Dataset",
+            marker=dict(size=4, color="#6f6fec"),
+        )
     )
-    mask_none = ~any_cond
 
-    # ---- Normal operation (unchanged)
-    if mask_none.any():
+    fig_ts.add_trace(
+        go.Scatter(
+            x=ice_loss_detector.loc[mask_not_clean, "timestamp"],
+            y=ice_loss_detector.loc[mask_not_clean, "output_power"],
+            mode="markers",
+            name="Filtered Out of Reference Power Curve",
+            marker=dict(size=4, color="#f14c4c"),
+        )
+    )
+
+    mask_other_manual = ice_loss_detector["other_manual"] == True
+    if mask_other_manual.any():
         fig_ts.add_trace(
             go.Scatter(
-                x=dff.loc[mask_none, "timestamp"],
-                y=dff.loc[mask_none, "output_power"],
+                x=ice_loss_detector.loc[mask_other_manual, "timestamp"],
+                y=ice_loss_detector.loc[mask_other_manual, "output_power"],
                 mode="markers",
-                name="Normal Operation",
+                name="Manual Filter",
+                marker=dict(size=5, color='orange'),
             )
         )
 
-    # ---- One trace per condition (unchanged)
-    for c in cond_cols:
-        mask = dff[c]
-        if mask.any():
-            fig_ts.add_trace(
-                go.Scatter(
-                    x=dff.loc[mask, "timestamp"],
-                    y=dff.loc[mask, "output_power"],
-                    mode="markers",
-                    name=c,
-                )
-            )
 
-    # ---- Layout (unchanged)
+    # # ---- Layout (unchanged)
     fig_ts.update_layout(
         xaxis_title="Time",
         yaxis_title="Output Power",
@@ -918,133 +898,137 @@ def update_time_series(
 
 
 
+
 @callback(
     Output("reference-power-curve-graph", "figure"),
     Input("generate-ref-pc", "n_clicks"),
-    [
-        State("selected-filename", "value"),
-        State("selected-turbine", "value"),
-        State("cleaned-files-store", "data"),
-        State("intermediate-json-config", "data"),
-    ],
+    State("selected-filename", "value"),
+    State("selected-turbine", "value"),
+    State("cleaned-files-store", "data"),
+    State("intermediate-json-config", "data"),
     prevent_initial_call=True,
 )
 def update_reference_power_curve(
     n_clicks,
-    selected_file_name,
+    selected_filename,
     selected_turbine,
     cleaned_files_store,
     config_json_str,
 ):
     fig_pc = go.Figure()
 
-    if not (selected_file_name and cleaned_files_store):
+    if not (selected_filename and cleaned_files_store):
         return fig_pc
 
+    # --- Load df
     df = pd.read_json(
-        cleaned_files_store[selected_file_name],
+        StringIO(cleaned_files_store[selected_filename]),
         orient="split",
     )
 
+    # --- Filter turbine if possible
     if selected_turbine and "id" in df.columns:
-        dff = df[df["id"] == selected_turbine]
+        dff = df[df["id"] == selected_turbine].copy()
     else:
-        dff = df
+        dff = df.copy()
 
     required_cols = {"output_power", "wind_speed"}
     if not required_cols.issubset(dff.columns):
         return fig_pc
 
-    cond_cols = [
-        "maintenance",
-        "faults",
-        "curtailment",
-        "icing_codes",
-        "ice_detection",
-        "ips_status",
-        "other_manual",
-    ]
+    # --- Ensure timestamp exists for customdata
+    # (You used it earlier, so let's keep it stable)
+    if "timestamp" in dff.columns:
+        ts_custom = dff["timestamp"]
+    else:
+        # fallback: index if it's datetime-like, else None
+        ts_custom = dff.index if isinstance(dff.index, pd.DatetimeIndex) else None
 
-    any_cond = np.logical_or.reduce(
-        [dff[c].to_numpy() for c in cond_cols if c in dff.columns]
-    )
-    mask_none = ~any_cond
-
-    if mask_none.any():
-        fig_pc.add_trace(
-            go.Scatter(
-                x=dff.loc[mask_none, "wind_speed"],
-                y=dff.loc[mask_none, "output_power"],
-                mode="markers",
-                name="Normal Operation",
-                marker=dict(color="gray", opacity=0.1),
-                customdata=dff.loc[mask_none, "timestamp"],
-            )
-        )
-
-    for c in cond_cols:
-        if c in dff.columns:
-            mask = dff[c]
-            if mask.any():
-                fig_pc.add_trace(
-                    go.Scatter(
-                        x=dff.loc[mask, "wind_speed"],
-                        y=dff.loc[mask, "output_power"],
-                        mode="markers",
-                        name=c,
-                        opacity=0.3,
-                        customdata=dff.loc[mask, "timestamp"],
-                    )
-                )
-
+    # --- Build IceLossDetector (only if config provided)
+    # If you ALWAYS want corrected wind speed, you can remove this if guard.
     if config_json_str:
-        if not isinstance(df.index, pd.DatetimeIndex):
-            if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(
-                    df["timestamp"],
-                    unit="s",
-                    errors="coerce",
-                    utc=True,
-                )
-                df = df.set_index("timestamp")
-            else:
-                raise ValueError(
-                    "DataFrame has no datetime index and no 'timestamp' column"
-                )
-
         ice_loss_detector = IceLossDetector(dff)
         ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
         ice_loss_detector.applyTemperatureCorrection()
+        ice_loss_detector.identifyCleanedDataset()  # ensures cleanedDatasetMask exists
         ice_loss_detector.makePowerCurve()
         pc = ice_loss_detector.powerCurve
 
+        plot_df = ice_loss_detector  # processed df-like object
+    else:
+        # No config => plot raw dff, but still try to use masks if present
+        plot_df = dff
+        pc = None
+
+    # --- Masks (must exist, otherwise don't pretend)
+    if "cleanedDatasetMask" in plot_df.columns:
+        mask_clean = plot_df["cleanedDatasetMask"].astype(bool)
+    else:
+        # If not present, treat everything as "not clean"
+        mask_clean = pd.Series(False, index=plot_df.index)
+
+    mask_not_clean = ~mask_clean
+
+    mask_other_manual = (
+        plot_df["other_manual"].astype(bool)
+        if "other_manual" in plot_df.columns
+        else pd.Series(False, index=plot_df.index)
+    )
+
+    # --- 3 marker scatters (only add if any points)
+    # 1) Cleaned dataset
+    if mask_clean.any():
+        fig_pc.add_trace(
+            go.Scatter(
+                x=plot_df.loc[mask_clean, "wind_speed"],
+                y=plot_df.loc[mask_clean, "output_power"],
+                mode="markers",
+                name="Reference Dataset",
+                marker=dict(size=5, color='#6f6fec'),
+                customdata=ts_custom.loc[mask_clean] if ts_custom is not None else None,
+            )
+        )
+
+    # 3) Manual override (plotted separately if any True)
+    if mask_other_manual.any():
+        fig_pc.add_trace(
+            go.Scatter(
+                x=plot_df.loc[mask_other_manual, "wind_speed"],
+                y=plot_df.loc[mask_other_manual, "output_power"],
+                mode="markers",
+                name="Manual Filter",
+                marker=dict(size=5, color='orange'),
+                customdata=ts_custom.loc[mask_other_manual] if ts_custom is not None else None,
+            )
+        )
+
+    # --- Power curve lines (if computed)
+    if pc is not None and len(pc) > 0:
         fig_pc.add_trace(
             go.Scatter(
                 x=pc["windSpeedMean"],
                 y=pc["outputPowerLowQuantile"],
                 mode="lines",
                 name="Low quantile",
-                line=dict(dash="dash", width=3),
+                line=dict(dash="dash", width=3, color="#52fa52"),
             )
         )
-
         fig_pc.add_trace(
             go.Scatter(
                 x=pc["windSpeedMean"],
                 y=pc["outputPowerHighQuantile"],
                 mode="lines",
                 name="High quantile",
-                line=dict(dash="dash", width=3),
+                line=dict(dash="dash", width=3, color="#139e13"),
             )
         )
-
         fig_pc.add_trace(
             go.Scatter(
                 x=pc["windSpeedMean"],
                 y=pc["outputPowerMean"],
                 mode="lines",
                 name="Mean power curve",
-                line=dict(width=4),
+                line=dict(width=4, color='#000080'),
             )
         )
 
@@ -1057,9 +1041,6 @@ def update_reference_power_curve(
     )
 
     return fig_pc
-
-
-
 
 
 # Update the key option for Normal Operation
@@ -1314,10 +1295,10 @@ def download_clean_file(
         )
 
     # --- ZIP MULTIPLE FILES ---
-    zip_buffer = io.BytesIO()
+    zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname, df in zip(file_names, cleaned_dfs):
-            csv_buffer = io.StringIO()
+            csv_buffer = StringIO()
             df.to_csv(csv_buffer, index=False, sep=",")
             zf.writestr(f"cleaned_{fname}.csv", csv_buffer.getvalue())
 
@@ -1593,7 +1574,7 @@ def refill_farm_table_from_csv(contents):
 
     decoded = base64.b64decode(content_string)
 
-    df = pd.read_csv(io.StringIO(decoded.decode("utf-8")))
+    df = pd.read_csv(StringIO(decoded.decode("utf-8")))
 
     return df.to_dict("records")
 

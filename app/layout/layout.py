@@ -11,10 +11,11 @@ navbar = dbc.NavbarSimple(
     children=[
         dbc.DropdownMenu(
             children=[
-                dbc.DropdownMenuItem("About Us", disabled=True),
+                # dbc.DropdownMenuItem("About Us", disabled=True),
                 dbc.DropdownMenuItem(
                     "Github",
-                    href='https://github.com/IEAWind-Task19/T19IceLossMethod',
+                    href='https://github.com/IEAColdClimateWind/IceLossMethod',
+                    # href='https://github.com/IEAWind-Task19/T19IceLossMethod',
                     target='_blank'
                 ),
             ],
@@ -23,16 +24,12 @@ navbar = dbc.NavbarSimple(
             label="Options",  
         ),
     ],
-    brand="IceLoss19",          
-    brand_href="#",             
+    brand="Ice Loss Method 3.0",              
     color="primary",            
     dark=True                   
 )
 
-def build_step_1_layout():
-    return html.Div([
 
-    ])
 
 layout = dmc.MantineProvider(children=[
     navbar,
