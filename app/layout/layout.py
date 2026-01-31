@@ -170,15 +170,7 @@ layout = dmc.MantineProvider(children=[
                                        ),
                             
                         ],
-                    ),
-
-                    html.H4(
-                        "Step 2.2. Filter Out Unwanted Data",
-                        className="my-4 text-center",               
-                        style={'font-weight': 'bold', 'text-decoration': 'underline'}
-                    ),
-
-                    
+                    ),                    
                 ],
             ),
             dmc.StepperStep(
@@ -207,6 +199,17 @@ layout = dmc.MantineProvider(children=[
                     html.Div(id='all-points-to-filter-out-icing-pc-store-div'),
                     html.Div(id='farm-stats'),
                     
+                    dmc.Group(
+                        justify="center",
+                        mt='xs',
+                        children=[
+                            dmc.Button('Download Turbine Statistics', 
+                                id='download-statistics-btn', 
+                                color='green'
+                            ),
+                        ],
+                    ),
+                    
                 ],
             ),
         ],
@@ -225,6 +228,8 @@ layout = dmc.MantineProvider(children=[
     dcc.Download(id="json-download"),
     dcc.Download(id="settings-download"),
     dcc.Download(id="farm-data-download"),
+    dcc.Download(id="power-curve-csv-download"),
+    dcc.Download(id="statistics-csv-download"),
     dcc.Upload(id="settings-upload", style={"display": "none"}),
 
     dcc.Store(id='intermediate-json-config'),

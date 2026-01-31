@@ -628,9 +628,7 @@ class IceLossDetector(pd.DataFrame):
             ts = self.index
         elif "timestamp" in self.columns:
             ts = self["timestamp"]
-        else:
-            ts = None
-
+    
         fig = go.Figure()
 
         cond_cols = [
@@ -683,7 +681,7 @@ class IceLossDetector(pd.DataFrame):
                         y=self.loc[mask, "output_power"],
                         mode="markers",
                         name=trace_name,
-                        marker=dict(opacity=0.3),
+                        marker=dict(opacity=0.3 if trace_name != 'Icing losses' else 0.6),
                         customdata=ts[mask_none],
                     )
                 )

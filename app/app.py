@@ -41,44 +41,145 @@ def update_dropdown_options(col_name, selected_file_name, file_contents, file_na
     return [{'label': unique_value, 'value': unique_value} for unique_value in unique_values_normal_ops_col]
 
 
+
+def statistics_dict_to_dataframe(ice_loss_detector) -> pd.DataFrame:
+    """
+    Recast IceLossDetector statistics dict into a flat DataFrame
+    with columns: ['metric', 'value'].
+
+    Units are intentionally excluded.
+    """
+
+    stats = ice_loss_detector.statistics
+
+    records = [
+        {'metric':'turbine_name' , 'value': ice_loss_detector.parameters['turbine_name']},
+        {'metric':'start_time' , 'value': ice_loss_detector.index.min()},
+        {'metric':'end_time' , 'value': ice_loss_detector.index.max()},
+    ]
+
+    for key, v in stats.items():
+        # Unwrap Series-like values
+        if isinstance(v, pd.Series):
+            if v.empty:
+                value = pd.NA
+            else:
+                value = v.iloc[0]
+        else:
+            value = v
+
+        # Normalize NaN / None
+        try:
+            if pd.isna(value):
+                value = pd.NA
+        except Exception:
+            pass
+
+        records.append(
+            {
+                "metric": key,
+                "value": value,
+            }
+        )
+    
+
+    return pd.DataFrame(records)
+
+
 def render_statistics_table(stats: dict) -> html.Table:
     """
-    Render IceLossDetector statistics dict as a clean HTML table.
+    Render IceLossDetector statistics dict as a clean HTML table,
+    with hard-coded units inferred from the metric key.
     """
 
-    def format_value(v):
+    UNITS = {
+        # time
+        "total_data_hours": "h",
+        "total_icing_duration": "h",
+        "reduced_production_duration": "h",
+        "icing_stop_duration": "h",
+        "maintenance_hours": "h",
+        "faults_hours": "h",
+        "curtailment_hours": "h",
+        "other_manual_hours": "h",
+        "icing_codes_hours": "h",
+        "ice_detection_hours": "h",
+        "ips_status_hours": "h",
+        "reference_hours": "h",
+
+        # shares / ratios (your screenshot shows values like 5.14, 2.75, etc.)
+        "total_icing_share": "%",
+        "reduced_production_share": "%",
+        "icing_stop_share": "%",
+        "total_icing_loss_share": "%",
+        "reduced_production_loss_share": "%",
+        "icing_stop_loss_share": "%",
+
+        # production / losses (commonly energy; adjust if yours is kWh instead)
+        "total_production": "kWh",
+        "total_expected_production": "kWh",
+        "total_losses": "kWh",
+        "total_icing_loss": "kWh",
+        "reduced_production_loss": "kWh",
+        "icing_stop_loss": "kWh",
+    }
+
+    def format_value(v) -> str:
+        """
+        Extract a displayable scalar from Series-like values,
+        then format nicely as string.
+        """
         if isinstance(v, pd.Series):
-            if not v.empty:
-                first_val = v.iloc[0]
-                if isinstance(first_val, float):
-                    return f"{first_val}"
-                return str(first_val)
-            return "—"
+            if v.empty:
+                return "—"
+            v = v.iloc[0]
+
+        try:
+            if pd.isna(v):
+                return "—"
+        except Exception:
+            pass
+
         if isinstance(v, float):
-            return f"{v}"
+            if v.is_integer():
+                return str(int(v))
+            return f"{v:.1f}"
+
         return str(v)
 
-    rows = [
-        html.Tr([
-            html.Td(
-                key.replace("_", " ").capitalize(),
-                style={"fontWeight": "600", "padding": "6px 12px"},
-            ),
-            html.Td(
-                format_value(value),
-                style={"textAlign": "right", "padding": "6px 12px"},
-            ),
-        ])
-        for key, value in stats.items()
-    ]
+
+    rows = []
+    for key, value in stats.items():
+        value_str = format_value(value)
+        unit = UNITS.get(key, "")
+
+        if unit and value_str != "—":
+            value_str = f"{value_str} {unit}"
+
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(
+                        key.replace("_", " ").capitalize(),
+                        style={"fontWeight": "600", "padding": "6px 12px"},
+                    ),
+                    html.Td(
+                        value_str,
+                        style={"textAlign": "right", "padding": "6px 12px"},
+                    ),
+                ]
+            )
+        )
 
     return html.Table(
         [
             html.Thead(
-                html.Tr([
-                    html.Th("Metric", style={"padding": "8px 12px"}),
-                    html.Th("Value", style={"padding": "8px 12px", "textAlign": "right"}),
-                ])
+                html.Tr(
+                    [
+                        html.Th("Metric", style={"padding": "8px 12px"}),
+                        html.Th("Value", style={"padding": "8px 12px", "textAlign": "right"}),
+                    ]
+                )
             ),
             html.Tbody(rows),
         ],
@@ -494,6 +595,8 @@ def capture_last_selection(power_selected, ts_selected):
         for p in points
     ]
 
+    print(f'cleaned={cleaned}')
+
     return {"source_graph": 'Power curve graph' if trigger == 'reference-power-curve-graph' else 'Time series graph', "points": cleaned}
 
 
@@ -523,13 +626,15 @@ def capture_last_selection(power_selected,  ):
             "curveNumber": p.get("curveNumber"),
             "pointNumber": p.get("pointNumber"),
             "pointIndex": p.get("pointIndex"),
-            "x": p.get("x"),\
+            "x": p.get("x"),
             "y": p.get("y"),
             "customdata": p.get("customdata"),
-            'timestamp': p.get('customdata') if trigger == "icing-losses-power-curve-graph" else p.get('x')
+            'timestamp': p.get('customdata')
         }
         for p in points
     ]
+
+    print(f'cleaned={cleaned}')
 
 
     return {"source_graph": 'Power curve graph' if trigger == 'icing-losses-power-curve-graph' else 'Time series graph', "points": cleaned}
@@ -558,11 +663,12 @@ def mark_other_manual(points_to_filter_ref_pc_sets, points_to_filter_icing_pc_se
     if "other_manual" not in df.columns:
         df["other_manual"] = False
 
-    # Filter to selected turbine (keep original df index labels)
-    dff = df[df["id"] == selected_turbine]
 
     if df.empty:
         return cleaned_files_store
+    
+    print(f'len(points_to_filter_ref_pc_sets)={len(points_to_filter_ref_pc_sets)}')
+    print(f'len(points_to_filter_icing_pc_sets)={len(points_to_filter_icing_pc_sets)}')
 
     total_points_to_filter = points_to_filter_ref_pc_sets + points_to_filter_icing_pc_sets
     
@@ -573,9 +679,16 @@ def mark_other_manual(points_to_filter_ref_pc_sets, points_to_filter_icing_pc_se
         if point.get("timestamp") is not None
     ] 
 
+    print(f'point_timestamps={point_timestamps}')
+
+    # mask = (
+    #     (df["id"] == selected_turbine) &
+    #     (df["timestamp"].isin(point_timestamps))
+    # )
+
     mask = (
         (df["id"] == selected_turbine) &
-        (df["timestamp"].isin(point_timestamps))
+        (pd.to_datetime(df["timestamp"]).isin(pd.to_datetime(point_timestamps)))
     )
 
     df.loc[mask, "other_manual"] = True
@@ -777,29 +890,28 @@ def update_power_curve(
 
     df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
 
+    print(f'other_man={df[df['other_manual']]}')
+
 
     if selected_turbine and "id" in df.columns:
         df = df[df["id"] == selected_turbine]
 
 
     if config_json_str:
+
         if not isinstance(df.index, pd.DatetimeIndex):
 
-            if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(
-                    df["timestamp"],
-                    unit="s",        
-                    errors="coerce",
-                    utc=True,
-                )
-                df = df.set_index("timestamp")
+            df.index = pd.to_datetime(
+                df["timestamp"],
+                unit="s",
+                errors="coerce",
+                utc=True,
+            )
 
-            else:
-                raise ValueError(
-                    "DataFrame has no datetime index and no 'timestamp' column"
-                )
         ice_loss_detector = IceLossDetector(df)
         ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
+        
+        ice_loss_detector.parameters['turbine_name'] = selected_turbine
         ice_loss_detector.computeFullChain()
 
 
@@ -899,148 +1011,6 @@ def update_time_series(
 
 
 
-@callback(
-    Output("reference-power-curve-graph", "figure"),
-    Input("generate-ref-pc", "n_clicks"),
-    State("selected-filename", "value"),
-    State("selected-turbine", "value"),
-    State("cleaned-files-store", "data"),
-    State("intermediate-json-config", "data"),
-    prevent_initial_call=True,
-)
-def update_reference_power_curve(
-    n_clicks,
-    selected_filename,
-    selected_turbine,
-    cleaned_files_store,
-    config_json_str,
-):
-    fig_pc = go.Figure()
-
-    if not (selected_filename and cleaned_files_store):
-        return fig_pc
-
-    # --- Load df
-    df = pd.read_json(
-        StringIO(cleaned_files_store[selected_filename]),
-        orient="split",
-    )
-
-    # --- Filter turbine if possible
-    if selected_turbine and "id" in df.columns:
-        dff = df[df["id"] == selected_turbine].copy()
-    else:
-        dff = df.copy()
-
-    required_cols = {"output_power", "wind_speed"}
-    if not required_cols.issubset(dff.columns):
-        return fig_pc
-
-    # --- Ensure timestamp exists for customdata
-    # (You used it earlier, so let's keep it stable)
-    if "timestamp" in dff.columns:
-        ts_custom = dff["timestamp"]
-    else:
-        # fallback: index if it's datetime-like, else None
-        ts_custom = dff.index if isinstance(dff.index, pd.DatetimeIndex) else None
-
-    # --- Build IceLossDetector (only if config provided)
-    # If you ALWAYS want corrected wind speed, you can remove this if guard.
-    if config_json_str:
-        ice_loss_detector = IceLossDetector(dff)
-        ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
-        ice_loss_detector.applyTemperatureCorrection()
-        ice_loss_detector.identifyCleanedDataset()  # ensures cleanedDatasetMask exists
-        ice_loss_detector.makePowerCurve()
-        pc = ice_loss_detector.powerCurve
-
-        plot_df = ice_loss_detector  # processed df-like object
-    else:
-        # No config => plot raw dff, but still try to use masks if present
-        plot_df = dff
-        pc = None
-
-    # --- Masks (must exist, otherwise don't pretend)
-    if "cleanedDatasetMask" in plot_df.columns:
-        mask_clean = plot_df["cleanedDatasetMask"].astype(bool)
-    else:
-        # If not present, treat everything as "not clean"
-        mask_clean = pd.Series(False, index=plot_df.index)
-
-    mask_not_clean = ~mask_clean
-
-    mask_other_manual = (
-        plot_df["other_manual"].astype(bool)
-        if "other_manual" in plot_df.columns
-        else pd.Series(False, index=plot_df.index)
-    )
-
-    # --- 3 marker scatters (only add if any points)
-    # 1) Cleaned dataset
-    if mask_clean.any():
-        fig_pc.add_trace(
-            go.Scatter(
-                x=plot_df.loc[mask_clean, "wind_speed"],
-                y=plot_df.loc[mask_clean, "output_power"],
-                mode="markers",
-                name="Reference Dataset",
-                marker=dict(size=5, color='#6f6fec'),
-                customdata=ts_custom.loc[mask_clean] if ts_custom is not None else None,
-            )
-        )
-
-    # 3) Manual override (plotted separately if any True)
-    if mask_other_manual.any():
-        fig_pc.add_trace(
-            go.Scatter(
-                x=plot_df.loc[mask_other_manual, "wind_speed"],
-                y=plot_df.loc[mask_other_manual, "output_power"],
-                mode="markers",
-                name="Manual Filter",
-                marker=dict(size=5, color='orange'),
-                customdata=ts_custom.loc[mask_other_manual] if ts_custom is not None else None,
-            )
-        )
-
-    # --- Power curve lines (if computed)
-    if pc is not None and len(pc) > 0:
-        fig_pc.add_trace(
-            go.Scatter(
-                x=pc["windSpeedMean"],
-                y=pc["outputPowerLowQuantile"],
-                mode="lines",
-                name="Low quantile",
-                line=dict(dash="dash", width=3, color="#52fa52"),
-            )
-        )
-        fig_pc.add_trace(
-            go.Scatter(
-                x=pc["windSpeedMean"],
-                y=pc["outputPowerHighQuantile"],
-                mode="lines",
-                name="High quantile",
-                line=dict(dash="dash", width=3, color="#139e13"),
-            )
-        )
-        fig_pc.add_trace(
-            go.Scatter(
-                x=pc["windSpeedMean"],
-                y=pc["outputPowerMean"],
-                mode="lines",
-                name="Mean power curve",
-                line=dict(width=4, color='#000080'),
-            )
-        )
-
-    fig_pc.update_layout(
-        title=f"Power curve: {selected_turbine}",
-        xaxis_title="Wind speed (corrected)",
-        yaxis_title="Power output",
-        legend_title="Legend",
-        template="plotly_white",
-    )
-
-    return fig_pc
 
 
 # Update the key option for Normal Operation
@@ -1620,8 +1590,258 @@ def download_farm_information(n_clicks, table_data):
             filename="farm_information.csv",
             index=False,
         )
+    
 
 
+# --- Optional: isolate shared logic so you don't copy/paste yourself into despair
+def _build_powercurve_and_plotdf(dff: pd.DataFrame, config_json_str: str, selected_turbine: str):
+    """
+    Returns:
+      plot_df: dataframe-like used for plotting (processed if config provided)
+      pc: power curve dataframe (or None)
+      ild: IceLossDetector instance (or None)
+    """
+    if not config_json_str:
+        return dff, None, None
+
+    # Ensure datetime index exists (IceLossDetector seems to like it)
+    if not isinstance(dff.index, pd.DatetimeIndex):
+        if "timestamp" in dff.columns:
+            dff = dff.copy()
+            dff.index = pd.to_datetime(
+                dff["timestamp"],
+                unit="s",
+                errors="coerce",
+                utc=True,
+            )
+
+    ild = IceLossDetector(dff)
+    ild.addParametersFromJSON(json.loads(config_json_str))
+    ild.parameters["turbine_name"] = selected_turbine
+
+    # Keep consistent behavior with your plotting callback
+    ild.applyTemperatureCorrection()
+    ild.identifyCleanedDataset()
+    ild.makePowerCurve()
+
+    return ild, ild.powerCurve, ild
+
+
+def _make_powercurve_figure(plot_df, pc, selected_turbine):
+    fig_pc = go.Figure()
+
+    required_cols = {"output_power", "wind_speed"}
+    if not required_cols.issubset(plot_df.columns):
+        return fig_pc
+
+    # customdata timestamps
+    if "timestamp" in plot_df.columns:
+        ts_custom = plot_df["timestamp"]
+    else:
+        ts_custom = plot_df.index if isinstance(plot_df.index, pd.DatetimeIndex) else None
+
+    # masks
+    if "cleanedDatasetMask" in plot_df.columns:
+        mask_clean = plot_df["cleanedDatasetMask"].astype(bool)
+    else:
+        mask_clean = pd.Series(False, index=plot_df.index)
+
+    mask_other_manual = (
+        plot_df["other_manual"].astype(bool)
+        if "other_manual" in plot_df.columns
+        else pd.Series(False, index=plot_df.index)
+    )
+
+    # points
+    if mask_clean.any():
+        fig_pc.add_trace(
+            go.Scatter(
+                x=plot_df.loc[mask_clean, "wind_speed"],
+                y=plot_df.loc[mask_clean, "output_power"],
+                mode="markers",
+                name="Reference Dataset",
+                marker=dict(size=5, color="#6f6fec"),
+                customdata=ts_custom.loc[mask_clean] if ts_custom is not None else None,
+            )
+        )
+
+    if mask_other_manual.any():
+        fig_pc.add_trace(
+            go.Scatter(
+                x=plot_df.loc[mask_other_manual, "wind_speed"],
+                y=plot_df.loc[mask_other_manual, "output_power"],
+                mode="markers",
+                name="Manual Filter",
+                marker=dict(size=5, color="orange"),
+                customdata=ts_custom.loc[mask_other_manual] if ts_custom is not None else None,
+            )
+        )
+
+    # power curve lines
+    if pc is not None and len(pc) > 0:
+        fig_pc.add_trace(
+            go.Scatter(
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerLowQuantile"],
+                mode="lines",
+                name="Low quantile",
+                line=dict(dash="dash", width=3, color="#52fa52"),
+            )
+        )
+        fig_pc.add_trace(
+            go.Scatter(
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerHighQuantile"],
+                mode="lines",
+                name="High quantile",
+                line=dict(dash="dash", width=3, color="#139e13"),
+            )
+        )
+        fig_pc.add_trace(
+            go.Scatter(
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerMean"],
+                mode="lines",
+                name="Mean power curve",
+                line=dict(width=4, color="#000080"),
+            )
+        )
+
+    fig_pc.update_layout(
+        title=f"Power curve: {selected_turbine}",
+        xaxis_title="Wind speed (corrected)",
+        yaxis_title="Power output",
+        legend_title="Legend",
+        template="plotly_white",
+    )
+    return fig_pc
+
+
+@callback(
+    Output("reference-power-curve-graph", "figure"),
+    Output("power-curve-csv-download", "data"),
+    Input("generate-ref-pc", "n_clicks"),
+    Input("dl-ref-pc", "n_clicks"),
+    State("selected-filename", "value"),
+    State("selected-turbine", "value"),
+    State("cleaned-files-store", "data"),
+    State("intermediate-json-config", "data"),
+    prevent_initial_call=True,
+)
+def render_and_maybe_download(
+    n_clicks_generate,
+    n_clicks_download,
+    selected_filename,
+    selected_turbine,
+    cleaned_files_store,
+    config_json_str,
+):
+    triggered = ctx.triggered_id  # "generate-ref-pc" or "dl-ref-pc"
+
+    fig_pc = go.Figure()
+
+    # Basic guards
+    if not (selected_filename and cleaned_files_store and selected_filename in cleaned_files_store):
+        return fig_pc, no_update
+
+    # Load df
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]), orient="split")
+
+    # Filter turbine if possible
+    if selected_turbine and "id" in df.columns:
+        dff = df[df["id"] == selected_turbine].copy()
+    else:
+        dff = df.copy()
+
+    # Build processed df + powercurve if config exists
+    plot_df, pc, ild = _build_powercurve_and_plotdf(dff, config_json_str, selected_turbine)
+
+    # Build figure (always)
+    fig_pc = _make_powercurve_figure(plot_df, pc, selected_turbine)
+
+    # Only download when the download button fired
+    if triggered == "dl-ref-pc":
+        # If no pc, you can either block download or export empty.
+        if pc is None or len(pc) == 0:
+            return fig_pc, no_update
+
+        # Filename dates: prefer datetime index if present; fallback gracefully
+        if isinstance(plot_df.index, pd.DatetimeIndex) and plot_df.index.notna().any():
+            dmin = plot_df.index.min()
+            dmax = plot_df.index.max()
+            date_part = f"{dmin:%Y-%m-%d}_{dmax:%Y-%m-%d}"
+        else:
+            date_part = "unknown_dates"
+
+        return (
+            fig_pc,
+            dcc.send_data_frame(
+                pc.to_csv,
+                filename=f"reference_power_curve_{selected_turbine}__{date_part}.csv",
+                index=False,
+            ),
+        )
+
+    # Generate button (or anything else): update fig only
+    return fig_pc, no_update
+
+@callback(
+    Output("statistics-csv-download", "data"),
+    Input("download-statistics-btn", "n_clicks"),
+   [
+        State("selected-filename", "value"),
+        State("selected-turbine", "value"),
+        State("intermediate-json-config", "data"),
+        State("cleaned-files-store", "data")
+    ],
+    prevent_initial_call=True,
+)
+def update_power_curve(
+    n_clicks,
+    selected_filename,
+    selected_turbine,
+    config_json_str,
+    cleaned_files_store,
+):
+    if not n_clicks or not selected_filename or not cleaned_files_store:
+        return no_update
+
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
+
+    if selected_turbine and "id" in df.columns:
+        df = df[df["id"] == selected_turbine]
+
+    if config_json_str:
+
+        if not isinstance(df.index, pd.DatetimeIndex):
+
+            df.index = pd.to_datetime(
+                df["timestamp"],
+                unit="s",
+                errors="coerce",
+                utc=True,
+            )
+    
+        ice_loss_detector = IceLossDetector(df)
+        ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
+        ice_loss_detector.parameters['turbine_name'] = selected_turbine
+        ice_loss_detector.computeFullChain()
+
+        return dcc.send_data_frame(
+            statistics_dict_to_dataframe(ice_loss_detector).to_csv,
+            filename=f"statistics_{selected_turbine}_{ice_loss_detector.index.min():%Y-%m-%d}_{ice_loss_detector.index.max():%Y-%m-%d}.csv",
+            index=False,
+        )
+    
+
+@callback(
+    Output("stepper-next-btn", "style"),
+    Input("stepper", "active"),
+)
+def toggle_stepper_next_btn(active_step):
+    if active_step == 2:
+        return {"display": "none"}
+    return {"display": "block"}
 
 if __name__ == '__main__':
     app.run(debug=True, port=8051)  
