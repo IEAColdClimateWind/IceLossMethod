@@ -6,6 +6,12 @@ Running the code requires Python libraries: Dash, Flask, Plotly, Matplotlib, Num
 requirements can be installed using Conda with
 ```
 conda env create -f environment.yml
+OR
+conda create -n dashenv python=3.11 -y
+conda activate dashenv
+pip install dash dash-bootstrap-components dash-mantine-components pandas matplotlib
+cd /pathToYourGitRepo/app
+python app.py
 ```
 This will create a new conda environment with Python 3.13 and the required libraries.
 
