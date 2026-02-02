@@ -5,8 +5,7 @@ Tooling to compute icing losses from wind turbine SCADA data. Produced by IEA wi
 Running the code requires Python libraries: Dash, Flask, Plotly, Matplotlib, Numpy and Pandas
 requirements can be installed using Conda with
 ```
-conda env create -f environment.yml
-OR
+
 conda create -n dashenv python=3.11 -y
 conda activate dashenv
 pip install dash dash-bootstrap-components dash-mantine-components pandas matplotlib
