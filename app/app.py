@@ -890,7 +890,7 @@ def update_power_curve(
 
     df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
 
-    print(f'other_man={df[df['other_manual']]}')
+    #print(f'other_man={df[df['other_manual']]}')
 
 
     if selected_turbine and "id" in df.columns:

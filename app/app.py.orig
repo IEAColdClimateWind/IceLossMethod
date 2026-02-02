@@ -1,0 +1,1669 @@
+import base64
+from io import BytesIO, StringIO
+import zipfile
+from time import sleep
+import json
+
+import flask
+from dash import ALL, Dash, html, Input, Output, callback, dcc, no_update, ctx, State, State, MATCH
+import dash
+import dash_bootstrap_components as dbc
+
+import pandas as pd
+import plotly.express as px
+import numpy as np
+import plotly.graph_objs as go
+from plotly.subplots import make_subplots
+
+from ice_case_identifier import IceLossDetector
+from layout import layout 
+from utils import *  
+
+from io import StringIO
+
+server = flask.Flask(__name__)  
+
+app = Dash(
+    __name__,
+    server=server,
+    title='Ice Loss Method 3.0',
+    update_title='Updating...', 
+    external_stylesheets=[dbc.themes.YETI], 
+    suppress_callback_exceptions=True
+)
+
+app.layout = layout.layout
+
+def update_dropdown_options(col_name, selected_file_name, file_contents, file_names,):
+    if not col_name:
+        return []
+    selected_file_content = file_contents[file_names.index(selected_file_name)]
+    df = parse_contents_into_df(selected_file_content, selected_file_name)
+    unique_values_normal_ops_col = df[col_name].unique()
+    return [{'label': unique_value, 'value': unique_value} for unique_value in unique_values_normal_ops_col]
+
+
+def render_statistics_table(stats: dict) -> html.Table:
+    """
+    Render IceLossDetector statistics dict as a clean HTML table.
+    """
+
+    def format_value(v):
+        if isinstance(v, pd.Series):
+            if not v.empty:
+                first_val = v.iloc[0]
+                if isinstance(first_val, float):
+                    return f"{first_val}"
+                return str(first_val)
+            return "—"
+        if isinstance(v, float):
+            return f"{v}"
+        return str(v)
+
+    rows = [
+        html.Tr([
+            html.Td(
+                key.replace("_", " ").capitalize(),
+                style={"fontWeight": "600", "padding": "6px 12px"},
+            ),
+            html.Td(
+                format_value(value),
+                style={"textAlign": "right", "padding": "6px 12px"},
+            ),
+        ])
+        for key, value in stats.items()
+    ]
+
+    return html.Table(
+        [
+            html.Thead(
+                html.Tr([
+                    html.Th("Metric", style={"padding": "8px 12px"}),
+                    html.Th("Value", style={"padding": "8px 12px", "textAlign": "right"}),
+                ])
+            ),
+            html.Tbody(rows),
+        ],
+        style={
+            "borderCollapse": "collapse",
+            "width": "100%",
+            "maxWidth": "600px",
+            "marginTop": "12px",
+            "border": "1px solid #ddd",
+            "fontSize": "14px",
+        },
+    )
+
+
+def clean_uploaded_files(
+    file_contents,
+    file_names,
+    selected_columns,
+    dropdown_ids,
+    unit_wind_speed,
+    unit_power,
+    unit_temperature,
+    normal_operation_key,
+    wd_col,
+    wd_unit,
+    p_col,
+    p_unit,
+    oper_mapping,
+    icing_mapping,
+):
+    """
+    Returns:
+        cleaned_dfs: list[pd.DataFrame]
+        error_msg: str | None
+    """
+
+    # --- Parse CSVs ---
+    dfs = [parse_contents_into_df(c, n) for c, n in zip(file_contents, file_names)]
+
+    # --- Column consistency check ---
+    if len(dfs) > 1:
+        ref_cols = list(dfs[0].columns)
+        if not all(list(df.columns) == ref_cols for df in dfs[1:]):
+            return None, "Toutes les colonnes ne sont pas identiques"
+
+    # --- Required fields ---
+    required_fields = [id_dict["index"] for id_dict in dropdown_ids]
+    missing_fields = [
+        field for field, selected in zip(required_fields, selected_columns) if not selected
+    ]
+    if missing_fields:
+        return None, f"Choose a column for: {', '.join(missing_fields)}"
+
+    # --- Required params ---
+    missing_params = []
+    if not unit_wind_speed:
+        missing_params.append("Unit wind speed")
+    if not unit_temperature:
+        missing_params.append("Unit temperature")
+    if not unit_power:
+        missing_params.append("Unit power")
+    if not normal_operation_key:
+        missing_params.append("Normal operation key")
+
+    if missing_params:
+        return None, f"Missing parameter(s): {', '.join(missing_params)}"
+
+    cleaned_dfs = []
+
+    for df in dfs:
+        rename_map = {}
+        col_normal_operation = None
+        col_to_keep = []
+
+        for col_value, id_dict in zip(selected_columns, dropdown_ids):
+            label = id_dict["index"]
+            if label == "Normal Operation":
+                col_normal_operation = col_value
+            else:
+                rename_map[col_value] = label
+            col_to_keep.append(label)
+
+        df = df.rename(columns=rename_map)
+
+        # --- Preserve ID column ---
+        col_to_keep.insert(0, "ID")
+
+        # --- Timestamp ---
+        if "Timestamp" in df.columns:
+            try:
+                df["Timestamp"] = pd.to_datetime(df["Timestamp"], dayfirst=True)
+                df["Timestamp"] = df["Timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception as e:
+                return None, f"Date error format for Timestamp: {str(e)}"
+
+        # --- Wind speed ---
+        if "Wind speed" in df.columns:
+            if unit_wind_speed == "kph":
+                df["Wind speed"] /= 3.6
+            elif unit_wind_speed == "mph":
+                df["Wind speed"] *= 0.44704
+
+        # --- Power ---
+        if "Output Power" in df.columns:
+            if unit_power == "W":
+                df["Output Power"] /= 1000
+            elif unit_power == "MW":
+                df["Output Power"] *= 1000
+
+        # --- Temperature ---
+        if "Ambient temperature" in df.columns:
+            if unit_temperature == "F":
+                df["Ambient temperature"] = (df["Ambient temperature"] - 32) * 5 / 9
+            elif unit_temperature == "K":
+                df["Ambient temperature"] -= 273.15
+
+        # --- Normal operation ---
+        if col_normal_operation in df.columns:
+            df["Normal Operation"] = df[col_normal_operation] == normal_operation_key
+
+        # --- Wind direction & pressure ---
+        df = df.rename(columns={wd_col: "Wind Direction", p_col: "Pressure"})
+
+        if "Wind Direction" in df.columns:
+            if wd_unit == "Radian":
+                df["Wind Direction"] *= np.pi / 180
+        else:
+            df["Wind Direction"] = np.nan
+        col_to_keep.append("Wind Direction")
+
+        if "Pressure" in df.columns:
+            df["Pressure"] *= {
+                "hPa": 100,
+                "kPa": 1000,
+                "atm": 101325,
+                "bar": 100000,
+                "PSI": 6894.76,
+            }.get(p_unit, 1)
+        else:
+            df["Pressure"] = np.nan
+        col_to_keep.append("Pressure")
+
+        # --- Operation modes ---
+        for mode, cfg in oper_mapping.items():
+            df[mode] = (
+                df[cfg["column"]] == cfg["key"]
+                if cfg["column"] in df.columns
+                else False
+            )
+            col_to_keep.append(mode)
+
+        # --- Icing modes ---
+        for mode, cfg in icing_mapping.items():
+            df[mode] = (
+                df[cfg["column"]] == cfg["key"]
+                if cfg["column"] in df.columns
+                else False
+            )
+            col_to_keep.append(mode)
+
+        df = df[col_to_keep]
+        df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+
+        cleaned_dfs.append(df)
+
+    return cleaned_dfs, None
+
+
+
+
+@callback(
+    Output('selected-file-div', 'children'), 
+    Input('selected-filename', 'value'),  
+    [
+        State('upload-data', 'contents'),
+        State('upload-data', 'filename'),
+    ], 
+    #prevent_initial_call=True
+)
+def update_output(selected_file_name, file_contents, file_names):
+    selected_file_content = file_contents[file_names.index(selected_file_name)]
+
+    prefilled_dash_table = build_farm_table_from_timeseries_uploads(file_contents, file_names)
+
+
+    return parse_contents_to_html(selected_file_content, selected_file_name, prefilled_dash_table)
+
+
+
+@callback(
+    Output('uploaded-data-output', 'children'),  
+    Input('upload-data', 'contents'), 
+    [State('upload-data', 'filename')], 
+)
+def update_output(file_contents, file_names):
+    if file_contents is not None:
+        df = parse_contents_into_df(file_contents[0], file_names[0])
+
+        # Check if any column named 'id' exists, case-insensitive
+        if "id" not in (c.lower() for c in df.columns):
+            df["ID"] = "T1"
+
+        unique_turbine_IDs = df['ID'].unique()
+ 
+        return html.Div(children=[
+            dbc.Row(children=[
+                dbc.Col([
+                    dbc.Col(
+                        html.H5("Filename: ", style={'fontWeight': 'bold', 'textDecoration': 'underline'}),
+                        width='auto',
+                    ),
+                    dbc.Col(
+                        dcc.Dropdown(
+                            id='selected-filename', 
+                            options=[{'label': file_name, 'value': file_name} for file_name in file_names],  # Choix disponibles
+                            value=file_names[0],
+                            #value=matched_col  # Préremplissage désactivé pour le moment
+                        ),
+                    ),
+                ]),
+
+                dbc.Col([
+                    dbc.Col(
+                        html.H5("Turbine: ", style={'fontWeight': 'bold', 'textDecoration': 'underline'}),
+                        width='auto',
+                    ),
+                    dbc.Col(
+                        dcc.Dropdown(
+                            id='selected-turbine', 
+                            options=[{'label': id, 'value': id} for id in unique_turbine_IDs],  
+                            value=unique_turbine_IDs[0],
+                            #value=matched_col  # Préremplissage désactivé pour le moment
+                            # style={'display': 'none'} if len(unique_turbine_IDs) == 1 else {}
+                        ),
+                    ),
+                ]),
+                
+                
+            ],
+                className='my-3 mb-4'
+            ),
+
+            html.Div(id='selected-file-div')
+        ])
+    
+
+@callback(
+    Output('selected-turbine-csv-head-container', 'children'),  
+    [
+        Input('selected-turbine', 'value'), 
+        Input('selected-filename', 'value'),
+    ],  
+    [
+        State('upload-data', 'contents'),
+        State('upload-data', 'filename'),
+    ], 
+    prevent_initial_call=True,
+)
+def update_output(selected_turbine, selected_filename, file_contents, file_names):
+    selected_file_content = file_contents[file_names.index(selected_filename)]
+    df = parse_contents_into_df(selected_file_content, selected_filename)
+
+    
+
+    dff = df[df['ID'] == selected_turbine]
+
+    table = dbc.Table.from_dataframe(
+        dff.head(),
+        striped=True,
+        bordered=True,
+        hover=True
+    )
+    return table
+
+
+@callback(
+    Output("currently-selected-points-container-div", "children"),
+    Input("last-selected-points-ref-pc-store", "data"),
+)
+def render_current_selection(last_selected):
+    if not last_selected:
+        return html.Div("No points currently selected")
+
+    source = last_selected.get("source_graph")
+    points = last_selected.get("points") or []
+
+    if not points:
+        # Optional: show which graph last cleared selection
+        return html.Div([
+            f"No points currently selected (last touched: {source})",
+            dbc.Button(
+                "Filter Out Points",
+                id="add-selected-points-btn",
+                color="primary",
+                size="sm",
+                className="w-200",
+                style={'display': 'none'}
+            ),
+        ])
+
+    return dbc.Row(
+        [
+            dbc.Col(
+                html.P(
+                    f"{len(points)} points currently selected (from {source})",
+                    className="mb-0",
+                ),
+                width=True,
+                className="d-flex align-items-center",
+            ),
+            dbc.Col(
+                dbc.Button(
+                    "Filter Out Points",
+                    id="add-selected-points-btn",
+                    color="primary",
+                    size="sm",
+                    className="w-200",
+                ),
+                width="auto",
+                style={"width": "200px"},
+                className="d-flex align-items-center justify-content-end",
+            ),
+        ],
+        className="g-2 align-items-center",
+        
+    )
+
+
+
+
+@callback(
+    Output("currently-selected-points-icing-pc-container-div", "children"),
+    Input("last-selected-points-icing-pc-store", "data"),
+)
+def render_current_selection(last_selected):
+    if not last_selected:
+        return html.Div("No points currently selected")
+
+    source = last_selected.get("source_graph")
+    points = last_selected.get("points") or []
+
+    if not points:
+        # Optional: show which graph last cleared selection
+        return html.Div([
+            f"No points currently selected (last touched: {source})",
+            dbc.Button(
+                "Filter Out Points",
+                id="add-selected-points-icing-losses-pc-btn",
+                color="primary",
+                size="sm",
+                className="w-200",
+                style={'display': 'none'}
+            ),
+        ])
+
+    return dbc.Row([
+        dbc.Col(
+            html.P(
+                f"{len(points)} points currently selected (from {source})",
+                className="mb-0",
+            ),
+            width=True,
+            className="d-flex align-items-center",
+        ),
+        dbc.Col(
+            dbc.Button(
+                "Filter Out Points",
+                id="add-selected-points-icing-losses-pc-btn",
+                color="primary",
+                size="sm",
+                className="w-200",
+            ),
+            width="auto",
+            style={"width": "200px"},
+            className="d-flex align-items-center justify-content-end",
+        )],
+        className="g-2 align-items-center",
+    )
+
+
+@callback(
+    Output("last-selected-points-ref-pc-store", "data"),
+    Input("reference-power-curve-graph", "selectedData"),
+    Input("time-series-graph", "selectedData"),
+    prevent_initial_callback=True,
+)
+def capture_last_selection(power_selected, ts_selected):
+    trigger = ctx.triggered_id  
+    if not trigger:
+        return no_update
+
+<<<<<<< HEAD
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]), orient="split")
+
+    if "id" not in df.columns:
+        # can't filter properly
+=======
+    if not ts_selected and not power_selected:
+>>>>>>> refs/remotes/origin/main
+        return no_update
+
+    selected_data = power_selected if trigger == "reference-power-curve-graph" else ts_selected
+    points = (selected_data or {}).get("points") or []
+
+
+    # If selection cleared, reflect that too (so UI can show "No points...")
+    if not points:
+        return {"source_graph": None, "points": []}
+
+    cleaned = [
+        {
+            "curveNumber": p.get("curveNumber"),
+            "pointNumber": p.get("pointNumber"),
+            "pointIndex": p.get("pointIndex"),
+            "x": p.get("x"),
+            "y": p.get("y"),
+            "customdata": p.get("customdata"),
+            'timestamp': p.get('customdata') if trigger == "reference-power-curve-graph" else p.get('x')
+        }
+        for p in points
+    ]
+
+    return {"source_graph": 'Power curve graph' if trigger == 'reference-power-curve-graph' else 'Time series graph', "points": cleaned}
+
+
+
+
+@callback(
+    Output("last-selected-points-icing-pc-store", "data"),
+    Input("icing-losses-power-curve-graph", "selectedData"),
+    #Input("time-series-graph", "selectedData"),
+    prevent_initial_callback=True,
+)
+def capture_last_selection(power_selected,  ):
+    trigger = ctx.triggered_id  
+    if not trigger:
+        return no_update
+<<<<<<< HEAD
+
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]), orient="split")
+
+    if "id" not in (c.lower() for c in df.columns):
+        # can't filter properly
+        print('NO ID !')
+        return no_update
+=======
+>>>>>>> refs/remotes/origin/main
+  
+    selected_data = power_selected if trigger == "icing-losses-power-curve-graph" else [] # else ts_selected
+    points = (selected_data or {}).get("points") or []
+
+
+    # If selection cleared, reflect that too (so UI can show "No points...")
+    if not points:
+        return {"source_graph": None, "points": []}
+
+    cleaned = [
+        {
+            "curveNumber": p.get("curveNumber"),
+            "pointNumber": p.get("pointNumber"),
+            "pointIndex": p.get("pointIndex"),
+            "x": p.get("x"),\
+            "y": p.get("y"),
+            "customdata": p.get("customdata"),
+            'timestamp': p.get('customdata') if trigger == "icing-losses-power-curve-graph" else p.get('x')
+        }
+        for p in points
+    ]
+
+
+    return {"source_graph": 'Power curve graph' if trigger == 'icing-losses-power-curve-graph' else 'Time series graph', "points": cleaned}
+
+
+@callback(
+    Output("cleaned-files-store", "data", allow_duplicate=True),
+    Input("points-to-filter-out-ref-pc-store", "data"),
+    Input("points-to-filter-out-icing-pc-store", "data"),
+    Input("selected-filename", "value"),
+    Input("selected-turbine", "value"),
+    State("cleaned-files-store", "data"),
+    prevent_initial_call=True,
+)
+def mark_other_manual(points_to_filter_ref_pc_sets, points_to_filter_icing_pc_sets, selected_filename, selected_turbine, cleaned_files_store):
+    if not cleaned_files_store or not selected_filename:
+        return no_update
+
+<<<<<<< HEAD
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]), orient="split")
+=======
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
+>>>>>>> refs/remotes/origin/main
+
+    if "id" not in df.columns:
+        # can't filter properly
+        return cleaned_files_store
+
+    # Ensure the column exists; default False
+    if "other_manual" not in df.columns:
+        df["other_manual"] = False
+
+    # Filter to selected turbine (keep original df index labels)
+    dff = df[df["id"] == selected_turbine]
+
+    if df.empty:
+        return cleaned_files_store
+
+    total_points_to_filter = points_to_filter_ref_pc_sets + points_to_filter_icing_pc_sets
+    
+    point_timestamps = [
+        point.get("timestamp")
+        for points_set in total_points_to_filter
+        for point in points_set
+        if point.get("timestamp") is not None
+    ] 
+
+    mask = (
+        (df["id"] == selected_turbine) &
+        (df["timestamp"].isin(point_timestamps))
+    )
+
+    df.loc[mask, "other_manual"] = True
+
+    if not point_timestamps:
+        return cleaned_files_store
+
+    # Re-serialize back into the store
+    cleaned_files_store[selected_filename] = df.to_json(orient="split", date_format="iso")
+
+    return cleaned_files_store
+
+
+@callback(
+    Output("stepper", "active"),
+    Input("stepper-back-btn", "n_clicks"),
+    Input("stepper-next-btn", "n_clicks"),
+    State("stepper", "active"),
+    prevent_initial_call=True,
+)
+def update(back, next_, current):
+    button_id = ctx.triggered_id
+    min_step = 0
+    max_step = 2
+    step = current if current is not None else 0
+    if button_id == "stepper-back-btn":
+        step = step - 1 if step > min_step else step
+    else:
+        step = step + 1 if step < max_step else step
+    return step
+
+
+@callback(
+    Output("points-to-filter-out-ref-pc-store", "data"),
+    Input("add-selected-points-btn", "n_clicks"),
+    Input({"type": "delete-points-ref-pc-set-btn", "index": ALL}, "n_clicks"),
+    State("last-selected-points-ref-pc-store", "data"),
+    State("points-to-filter-out-ref-pc-store", "data"),
+    prevent_initial_call=True,
+)
+def update_points_store(add_clicks, delete_clicks, last_selected, store_data):
+    store_data = store_data or []
+    trig = ctx.triggered_id
+
+    if trig is None:
+        return no_update
+
+    # --- DELETE path ---
+    if isinstance(trig, dict) and trig.get("type") == "delete-points-ref-pc-set-btn" and delete_clicks:
+        idx = trig.get("index")
+        if idx is None or idx < 0 or idx >= len(store_data):
+            return no_update  # stale click / race / whatever
+        # remove the selected set
+        return store_data[:idx] + store_data[idx+1:]
+
+    # --- ADD path ---
+    if trig == "add-selected-points-btn" and add_clicks:
+        points = (last_selected or {}).get("points") or []
+        if not points:
+            return no_update
+        store_data.append(points)
+        return store_data
+
+    return no_update
+
+
+
+@callback(
+    Output("points-to-filter-out-icing-pc-store", "data"),
+    Input("add-selected-points-icing-losses-pc-btn", "n_clicks"),
+    Input({"type": "delete-points-icing-pc-set-btn", "index": ALL}, "n_clicks"),
+    State("last-selected-points-icing-pc-store", "data"),
+    State("points-to-filter-out-icing-pc-store", "data"),
+    prevent_initial_call=True,
+)
+def update_points_store(add_clicks, delete_clicks, last_selected, store_data):
+    store_data = store_data or []
+    trig = ctx.triggered_id
+
+    if trig is None:
+        return no_update
+
+    if isinstance(trig, dict) and trig.get("type") == "delete-points-icing-pc-set-btn" and delete_clicks:
+        idx = trig.get("index")
+        if idx is None or idx < 0 or idx >= len(store_data):
+            return no_update  # stale click / race / whatever
+        # remove the selected set
+        return store_data[:idx] + store_data[idx+1:]
+
+    if trig == "add-selected-points-icing-losses-pc-btn" and add_clicks:
+        points = (last_selected or {}).get("points") or []
+        if not points:
+            return no_update
+        store_data.append(points)
+        return store_data
+
+    return no_update
+
+
+@callback(
+    Output("all-points-to-filter-out-icing-pc-store-div", "children"),
+    Input("points-to-filter-out-icing-pc-store", "data"),
+)
+def render_all_filtered_point_sets(store_data):
+    if not store_data:
+        return html.Div("No point sets stored to be filtered out the icing losses statistics.")
+
+    rows = []
+    for i, point_list in enumerate(store_data):
+        rows.append(
+            dbc.Row(
+                [
+                    dbc.Col(
+                        html.P(f"Set {i+1}: {len(point_list)} points", className="mb-0"),
+                        width=True,
+                        className="d-flex align-items-center",
+                    ),
+                    dbc.Col(
+                        dbc.Button(
+                            "Delete",
+                            id={"type": "delete-points-icing-pc-set-btn", "index": i},
+                            color="danger",
+                            outline=True,
+                            size="sm",
+                            className="w-100",
+                        ),
+                        width="auto",
+                        style={"width": "100px"},
+                        className="d-flex align-items-center justify-content-end",
+                    ),
+                ],
+                className="g-2 align-items-center py-1",
+            )
+        )
+
+    return rows
+
+@callback(
+    Output("all-points-to-filter-out-ref-pc-store-div", "children"),
+    Input("points-to-filter-out-ref-pc-store", "data"),
+)
+def render_all_filtered_point_sets(store_data):
+    if not store_data:
+        return html.Div("No point sets stored to be filtered out the reference power curve")
+
+    rows = []
+    for i, point_list in enumerate(store_data):
+        rows.append(
+            dbc.Row(
+                [
+                    dbc.Col(
+                        html.P(f"Set {i+1}: {len(point_list)} points", className="mb-0"),
+                        width=True,
+                        className="d-flex align-items-center",
+                    ),
+                    dbc.Col(
+                        dbc.Button(
+                            "Delete",
+                            id={"type": "delete-points-ref-pc-set-btn", "index": i},
+                            color="danger",
+                            outline=True,
+                            size="sm",
+                            className="w-100",
+                        ),
+                        width="auto",
+                        style={"width": "100px"},
+                        className="d-flex align-items-center justify-content-end",
+                    ),
+                ],
+                className="g-2 align-items-center py-1",
+            )
+        )
+
+    return rows
+
+
+@callback(
+    Output("icing-losses-power-curve-graph", "figure"),
+    Output("farm-stats", "children"),
+    Input('compute-icing-losses-btn', 'n_clicks'),
+    [
+        State("selected-filename", "value"),
+        State("selected-turbine", "value"),
+        State("intermediate-json-config", "data"),
+        State("cleaned-files-store", "data")
+    ],
+    prevent_initial_call=True,
+)
+def update_power_curve(
+    n_clicks,
+    selected_filename,
+    selected_turbine,
+    config_json_str,
+    cleaned_files_store,
+):
+    if not n_clicks or not selected_filename or not cleaned_files_store:
+        return None, []
+
+
+<<<<<<< HEAD
+    df = pd.read_json(StringIO(
+        cleaned_files_store[selected_file_name]),
+        orient="split"
+    )
+=======
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
+>>>>>>> refs/remotes/origin/main
+
+
+    if selected_turbine and "id" in df.columns:
+        df = df[df["id"] == selected_turbine]
+
+
+    if config_json_str:
+        if not isinstance(df.index, pd.DatetimeIndex):
+
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(
+                    df["timestamp"],
+                    unit="s",        
+                    errors="coerce",
+                    utc=True,
+                )
+                df = df.set_index("timestamp")
+
+            else:
+                raise ValueError(
+                    "DataFrame has no datetime index and no 'timestamp' column"
+                )
+        ice_loss_detector = IceLossDetector(df)
+        ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
+        ice_loss_detector.computeFullChain()
+
+
+        return ice_loss_detector.plot_plotly_power_curves_with_icing(), render_statistics_table(ice_loss_detector.statistics)
+
+
+
+
+@callback(
+    Output("time-series-graph", "figure"),
+    [
+        Input("selected-filename", "value"),
+        Input("selected-turbine", "value"),
+        Input("cleaned-files-store", "data"),
+        Input("intermediate-json-config", "data"),
+    ],
+    prevent_initial_call=True,
+)
+def update_time_series(
+    selected_filename,
+    selected_turbine,
+    cleaned_files_store,
+    config_json_str,
+):
+    fig_ts = go.Figure()
+
+    if not (selected_filename and cleaned_files_store):
+        return fig_ts
+
+<<<<<<< HEAD
+    df = pd.read_json(StringIO(
+        cleaned_files_store[selected_file_name]),
+        orient="split",
+    )
+=======
+    df = pd.read_json(StringIO(cleaned_files_store[selected_filename]),  orient="split",)
+>>>>>>> refs/remotes/origin/main
+
+    # Filter turbine
+    if selected_turbine and "id" in df.columns:
+        dff = df[df["id"] == selected_turbine]
+    else:
+        dff = df
+
+    
+
+    required_cols = {"timestamp", "output_power", "wind_speed"}
+    if not required_cols.issubset(dff.columns):
+        print("Missing required columns:", required_cols - set(dff.columns))
+        return fig_ts
+
+    ice_loss_detector = IceLossDetector(dff)
+    ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
+
+    ice_loss_detector.identifyCleanedDataset()
+
+    
+
+    # Boolean masks
+    mask_clean = ice_loss_detector["cleanedDatasetMask"]
+    mask_not_clean = ~mask_clean
+
+    fig_ts.add_trace(
+        go.Scatter(
+            x=ice_loss_detector.loc[mask_clean, "timestamp"],
+            y=ice_loss_detector.loc[mask_clean, "output_power"],
+            mode="markers",
+            name="Reference Dataset",
+            marker=dict(size=4, color="#6f6fec"),
+        )
+    )
+
+    fig_ts.add_trace(
+        go.Scatter(
+            x=ice_loss_detector.loc[mask_not_clean, "timestamp"],
+            y=ice_loss_detector.loc[mask_not_clean, "output_power"],
+            mode="markers",
+            name="Filtered Out of Reference Power Curve",
+            marker=dict(size=4, color="#f14c4c"),
+        )
+    )
+
+    mask_other_manual = ice_loss_detector["other_manual"] == True
+    if mask_other_manual.any():
+        fig_ts.add_trace(
+            go.Scatter(
+                x=ice_loss_detector.loc[mask_other_manual, "timestamp"],
+                y=ice_loss_detector.loc[mask_other_manual, "output_power"],
+                mode="markers",
+                name="Manual Filter",
+                marker=dict(size=5, color='orange'),
+            )
+        )
+
+
+    # # ---- Layout (unchanged)
+    fig_ts.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Output Power",
+    )
+
+    return fig_ts
+
+
+
+
+@callback(
+    Output("reference-power-curve-graph", "figure"),
+    Input("generate-ref-pc", "n_clicks"),
+    State("selected-filename", "value"),
+    State("selected-turbine", "value"),
+    State("cleaned-files-store", "data"),
+    State("intermediate-json-config", "data"),
+    prevent_initial_call=True,
+)
+def update_reference_power_curve(
+    n_clicks,
+    selected_filename,
+    selected_turbine,
+    cleaned_files_store,
+    config_json_str,
+):
+    fig_pc = go.Figure()
+
+    if not (selected_filename and cleaned_files_store):
+        return fig_pc
+
+<<<<<<< HEAD
+    df = pd.read_json(StringIO(
+        cleaned_files_store[selected_file_name]),
+=======
+    # --- Load df
+    df = pd.read_json(
+        StringIO(cleaned_files_store[selected_filename]),
+>>>>>>> refs/remotes/origin/main
+        orient="split",
+    )
+
+    # --- Filter turbine if possible
+    if selected_turbine and "id" in df.columns:
+        dff = df[df["id"] == selected_turbine].copy()
+    else:
+        dff = df.copy()
+
+    required_cols = {"output_power", "wind_speed"}
+    if not required_cols.issubset(dff.columns):
+        return fig_pc
+
+    # --- Ensure timestamp exists for customdata
+    # (You used it earlier, so let's keep it stable)
+    if "timestamp" in dff.columns:
+        ts_custom = dff["timestamp"]
+    else:
+        # fallback: index if it's datetime-like, else None
+        ts_custom = dff.index if isinstance(dff.index, pd.DatetimeIndex) else None
+
+    # --- Build IceLossDetector (only if config provided)
+    # If you ALWAYS want corrected wind speed, you can remove this if guard.
+    if config_json_str:
+        ice_loss_detector = IceLossDetector(dff)
+        ice_loss_detector.addParametersFromJSON(json.loads(config_json_str))
+        ice_loss_detector.applyTemperatureCorrection()
+        ice_loss_detector.identifyCleanedDataset()  # ensures cleanedDatasetMask exists
+        ice_loss_detector.makePowerCurve()
+        pc = ice_loss_detector.powerCurve
+
+        plot_df = ice_loss_detector  # processed df-like object
+    else:
+        # No config => plot raw dff, but still try to use masks if present
+        plot_df = dff
+        pc = None
+
+    # --- Masks (must exist, otherwise don't pretend)
+    if "cleanedDatasetMask" in plot_df.columns:
+        mask_clean = plot_df["cleanedDatasetMask"].astype(bool)
+    else:
+        # If not present, treat everything as "not clean"
+        mask_clean = pd.Series(False, index=plot_df.index)
+
+    mask_not_clean = ~mask_clean
+
+    mask_other_manual = (
+        plot_df["other_manual"].astype(bool)
+        if "other_manual" in plot_df.columns
+        else pd.Series(False, index=plot_df.index)
+    )
+
+    # --- 3 marker scatters (only add if any points)
+    # 1) Cleaned dataset
+    if mask_clean.any():
+        fig_pc.add_trace(
+            go.Scatter(
+                x=plot_df.loc[mask_clean, "wind_speed"],
+                y=plot_df.loc[mask_clean, "output_power"],
+                mode="markers",
+                name="Reference Dataset",
+                marker=dict(size=5, color='#6f6fec'),
+                customdata=ts_custom.loc[mask_clean] if ts_custom is not None else None,
+            )
+        )
+
+    # 3) Manual override (plotted separately if any True)
+    if mask_other_manual.any():
+        fig_pc.add_trace(
+            go.Scatter(
+                x=plot_df.loc[mask_other_manual, "wind_speed"],
+                y=plot_df.loc[mask_other_manual, "output_power"],
+                mode="markers",
+                name="Manual Filter",
+                marker=dict(size=5, color='orange'),
+                customdata=ts_custom.loc[mask_other_manual] if ts_custom is not None else None,
+            )
+        )
+
+    # --- Power curve lines (if computed)
+    if pc is not None and len(pc) > 0:
+        fig_pc.add_trace(
+            go.Scatter(
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerLowQuantile"],
+                mode="lines",
+                name="Low quantile",
+                line=dict(dash="dash", width=3, color="#52fa52"),
+            )
+        )
+        fig_pc.add_trace(
+            go.Scatter(
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerHighQuantile"],
+                mode="lines",
+                name="High quantile",
+                line=dict(dash="dash", width=3, color="#139e13"),
+            )
+        )
+        fig_pc.add_trace(
+            go.Scatter(
+                x=pc["windSpeedMean"],
+                y=pc["outputPowerMean"],
+                mode="lines",
+                name="Mean power curve",
+                line=dict(width=4, color='#000080'),
+            )
+        )
+
+    fig_pc.update_layout(
+        title=f"Power curve: {selected_turbine}",
+        xaxis_title="Wind speed (corrected)",
+        yaxis_title="Power output",
+        legend_title="Legend",
+        template="plotly_white",
+    )
+
+    return fig_pc
+
+
+# Update the key option for Normal Operation
+@callback(
+    Output('normal-operation-key', 'options'),
+    [
+        Input({'type': 'column-mapper', 'index': 'Normal Operation'}, 'value'),
+        Input('selected-filename', 'value'),
+    ],
+    [
+        State('upload-data', 'contents'),
+        State('upload-data', 'filename'),
+    ],
+    prevent_initial_call=True,
+)
+def update_operation_key_options(col_name, selected_file_name, file_contents, file_names,):
+    if not col_name:
+        return []
+    selected_file_content = file_contents[file_names.index(selected_file_name)]
+    df = parse_contents_into_df(selected_file_content, selected_file_name)
+    unique_values_normal_ops_col = df[col_name].unique()
+    return [{'label': unique_value, 'value': unique_value} for unique_value in unique_values_normal_ops_col]
+
+
+# Update the maintenance key option
+@callback(
+    Output('column-key-oper-Maintenance', 'options'),
+    Input('column-mapper-oper-Maintenance',  'value'),
+    State('selected-filename', 'value'),
+    State('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+)
+def update_maintenance_key_options(col_name, selected_file_name, file_contents, file_names):
+    return update_dropdown_options(col_name, selected_file_name, file_contents, file_names)
+
+
+# Update the faults key option
+@callback(
+    Output('column-key-oper-Faults', 'options'),
+    Input('column-mapper-oper-Faults',  'value'),
+    State('selected-filename', 'value'),
+    State('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+)
+def update_faults_key_options(col_name, selected_file_name, file_contents, file_names):
+    return update_dropdown_options(col_name, selected_file_name, file_contents, file_names)
+
+
+# Update the curtailment key option
+@callback(
+    Output('column-key-oper-Curtailment', 'options'),
+    Input('column-mapper-oper-Curtailment',  'value'),
+    State('selected-filename', 'value'),
+    State('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+)
+def update_Curtailment_key_options(col_name, selected_file_name, file_contents, file_names):
+    return update_dropdown_options(col_name, selected_file_name, file_contents, file_names)
+
+
+# Update the other manual key option
+@callback(
+    Output('column-key-oper-Other manual', 'options'),
+    Input('column-mapper-oper-Other manual',  'value'),
+    State('selected-filename', 'value'),
+    State('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+)
+def update_other_manual_key_options(col_name, selected_file_name, file_contents, file_names):
+    return update_dropdown_options(col_name, selected_file_name, file_contents, file_names)
+
+
+# Update the icing codes key option
+@callback(
+    Output('column-key-icing-Icing codes', 'options'),
+    Input('column-mapper-icing-Icing codes',  'value'),
+    State('selected-filename', 'value'),
+    State('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+)
+def update_icing_codes_key_options(col_name, selected_file_name, file_contents, file_names):
+    return update_dropdown_options(col_name, selected_file_name, file_contents, file_names)
+
+
+# Update the Ice detection key option
+@callback(
+    Output('column-key-icing-Ice detection', 'options'),
+    Input('column-mapper-icing-Ice detection',  'value'),
+    State('selected-filename', 'value'),
+    State('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+)
+def update_ice_detection_key_options(col_name, selected_file_name, file_contents, file_names):
+    return update_dropdown_options(col_name, selected_file_name, file_contents, file_names)
+
+
+
+# Update the IPS status key option
+@callback(
+    Output('column-key-icing-IPS status', 'options'),
+    Input('column-mapper-icing-IPS status',  'value'),
+    State('selected-filename', 'value'),
+    State('upload-data', 'contents'),
+    State('upload-data', 'filename'),
+)
+def update_IPS_status_key_options(col_name, selected_file_name, file_contents, file_names):
+    return update_dropdown_options(col_name, selected_file_name, file_contents, file_names)
+
+
+# Fonction to validate that all required field is well chosen
+def validate_required_fields(selected_columns, dropdown_ids, unit_wind_speed, unit_power, unit_temperature,
+                             normal_operation_key):
+    # Vérifie les colonnes manquantes
+    required_fields = [id_dict["index"] for id_dict in dropdown_ids]
+    missing_fields = [field for field, selected in zip(required_fields, selected_columns) if not selected]
+    if missing_fields:
+        return f"Choose a column for: {', '.join(missing_fields)}"
+
+    # Vérifie si les unités et le mot-clé sont définis
+    missing_params = []
+    if not unit_wind_speed:
+        missing_params.append("Unit wind speed")
+    if not unit_temperature:
+        missing_params.append("Unit temperature")
+    if not unit_power:
+        missing_params.append("Unit power")
+    if not normal_operation_key:
+        missing_params.append("Normal operation key")
+
+    if missing_params:
+        return f"Missing parameter(s): {', '.join(missing_params)}"
+
+    return None
+
+
+@callback(
+    Output('data-to-download', 'data'),
+    Output('missing-columns-alert', 'children'),
+    Output('missing-columns-alert', 'is_open'),
+    Output('cleaned-files-store', 'data', allow_duplicate=True),
+    Input('download-clean-files-btn', 'n_clicks'),
+    [
+        State('upload-data', 'contents'),
+        State('upload-data', 'filename'),
+        State({'type': 'column-mapper', 'index': ALL}, 'value'),
+        State({'type': 'column-mapper', 'index': ALL}, 'id'),
+        State('unit-wind-speed', 'value'),
+        State('unit-power', 'value'),
+        State('unit-temperature', 'value'),
+        State('normal-operation-key', 'value'),
+
+        # Données météo optionnelles
+        State('column-mapper-met-Wind direction', 'value'),
+        State('unit-wind-direction', 'value'),
+        State('column-mapper-met-Pressure', 'value'),
+        State('unit-pressure', 'value'),
+
+        # Colonnes opérationnelles
+        *[State(f'column-mapper-oper-{col}', 'value') for col in OPTIONAL_OPER_COLUMNS],
+        *[State(f'column-key-oper-{col}', 'value') for col in OPTIONAL_OPER_COLUMNS],
+
+        # Colonnes de givre
+        *[State(f'column-mapper-icing-{col}', 'value') for col in OPTIONAL_ICING_COLUMNS],
+        *[State(f'column-key-icing-{col}', 'value') for col in OPTIONAL_ICING_COLUMNS],
+    ],
+    prevent_initial_call=True,
+)
+def download_clean_file(
+    n_clicks,
+    file_contents,
+    file_names,
+    selected_columns,
+    dropdown_ids,
+    unit_wind_speed,
+    unit_power,
+    unit_temperature,
+    normal_operation_key,
+    wd_col,
+    wd_unit,
+    p_col,
+    p_unit,
+    *args
+):
+    if not n_clicks:
+        return no_update, no_update, no_update, no_update
+
+    nb_oper = len(OPTIONAL_OPER_COLUMNS)
+    nb_icing = len(OPTIONAL_ICING_COLUMNS)
+
+    oper_cols = args[:nb_oper]
+    oper_keys = args[nb_oper:nb_oper * 2]
+    icing_cols = args[nb_oper * 2:nb_oper * 2 + nb_icing]
+    icing_keys = args[nb_oper * 2 + nb_icing:nb_oper * 2 + nb_icing * 2]
+
+    oper_mapping = {
+        OPTIONAL_OPER_COLUMNS[i]: {
+            "column": oper_cols[i] or "",
+            "key": oper_keys[i] or "",
+        }
+        for i in range(nb_oper)
+    }
+
+    icing_mapping = {
+        OPTIONAL_ICING_COLUMNS[i]: {
+            "column": icing_cols[i] or "",
+            "key": icing_keys[i] or "",
+        }
+        for i in range(nb_icing)
+    }
+
+
+    cleaned_dfs, error_msg = clean_uploaded_files(
+        file_contents=file_contents,
+        file_names=file_names,
+        selected_columns=selected_columns,
+        dropdown_ids=dropdown_ids,
+        unit_wind_speed=unit_wind_speed,
+        unit_power=unit_power,
+        unit_temperature=unit_temperature,
+        normal_operation_key=normal_operation_key,
+        wd_col=wd_col,
+        wd_unit=wd_unit,
+        p_col=p_col,
+        p_unit=p_unit,
+        oper_mapping=oper_mapping,
+        icing_mapping=icing_mapping,
+    )
+
+    if error_msg:
+        return no_update, error_msg, True, no_update
+
+
+
+    # --- STORE PAYLOAD ---
+    cleaned_store = {
+        fname: df.to_json(orient="split", date_format="iso")
+        for fname, df in zip(file_names, cleaned_dfs)
+    }
+
+    # --- DOWNLOAD ---
+    if len(cleaned_dfs) == 1:
+        return (
+            dcc.send_data_frame(
+                cleaned_dfs[0].to_csv,
+                filename=f"cleaned_{file_names[0]}.csv",
+                index=False,
+                sep=",",
+            ),
+            "",
+            False,
+            cleaned_store,
+        )
+
+    # --- ZIP MULTIPLE FILES ---
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname, df in zip(file_names, cleaned_dfs):
+            csv_buffer = StringIO()
+            df.to_csv(csv_buffer, index=False, sep=",")
+            zf.writestr(f"cleaned_{fname}.csv", csv_buffer.getvalue())
+
+    zip_buffer.seek(0)
+
+    return (
+        dcc.send_bytes(zip_buffer.read(), "cleaned_files_bundle.zip"),
+        "",
+        False,
+        cleaned_store,
+    )
+
+
+
+# Download the json file
+@callback(
+    Output("settings-download", "data"),
+    Input("download-json-btn", "n_clicks"),
+    [
+        State('upload-data', 'filename'),
+        State({'type': 'column-mapper', 'index': ALL}, 'value'),
+        State({'type': 'column-mapper', 'index': ALL}, 'id'),
+
+        # Unités de base
+        State('unit-wind-speed', 'value'),
+        State('unit-power', 'value'),
+        State('unit-temperature', 'value'),
+        State('normal-operation-key', 'value'),
+
+        # Données météo optionnelles
+        State('column-mapper-met-Wind direction', 'value'),
+        State('unit-wind-direction', 'value'),
+        State('column-mapper-met-Pressure', 'value'),
+        State('unit-pressure', 'value'),
+
+        # Colonnes opérationnelles
+        *[State(f'column-mapper-oper-{col}', 'value') for col in OPTIONAL_OPER_COLUMNS],
+        *[State(f'column-key-oper-{col}', 'value') for col in OPTIONAL_OPER_COLUMNS],
+
+        # Colonnes de givre
+        *[State(f'column-mapper-icing-{col}', 'value') for col in OPTIONAL_ICING_COLUMNS],
+        *[State(f'column-key-icing-{col}', 'value') for col in OPTIONAL_ICING_COLUMNS],
+
+        # Options courbe de puissance
+        State('temperature-threshold', 'value'),
+        State('output-path', 'value'),
+        State('lower-limit', 'value'),
+        State('upper-limit', 'value'),
+        State('binning-min', 'value'),
+        State('binning-max', 'value'),
+        State('binning-step', 'value'),
+    ],
+    prevent_initial_call=True
+)
+
+def save_settings_to_json(
+    n_clicks, 
+    filename, 
+    selected_columns, 
+    dropdown_ids,
+    unit_wind_speed, 
+    unit_power, 
+    unit_temperature, 
+    normal_key,
+    wd_col, 
+    wd_unit, 
+    p_col, 
+    p_unit,
+    *args
+):
+    if not n_clicks:
+        return
+
+    # === Extraire les parties des args ===
+    nb_oper = len(OPTIONAL_OPER_COLUMNS)
+    nb_icing = len(OPTIONAL_ICING_COLUMNS)
+
+    oper_cols = args[:nb_oper]
+    oper_keys = args[nb_oper:nb_oper * 2]
+    icing_cols = args[nb_oper * 2:nb_oper * 2 + nb_icing]
+    icing_keys = args[nb_oper * 2 + nb_icing:nb_oper * 2 + nb_icing * 2]
+
+    # turbine_name, rated_power, hub_height, elevation, temp_thresh, output_path, lower_lim, upper_lim, bin_min, bin_max, bin_step = args[-11:]
+    temp_thresh, output_path, lower_lim, upper_lim, bin_min, bin_max, bin_step = args[-7:]
+
+    # === Construction du dictionnaire final ===
+    config = {
+        "columns": {
+            id_dict['index']: col or "" for col, id_dict in zip(selected_columns, dropdown_ids)
+        },
+        "parameters": {
+            "unit_wind_speed": unit_wind_speed or "",
+            "unit_power": unit_power or "",
+            "unit_temperature": unit_temperature or "",
+            "normal_operation_key": normal_key or "",
+        },
+        "optional_columns": {
+            "meteorological": {
+                "Wind direction": {
+                    "column": wd_col or "",
+                    "unit": wd_unit or ""
+                },
+                "Pressure": {
+                    "column": p_col or "",
+                    "unit": p_unit or ""
+                }
+            },
+            "operation": {
+                OPTIONAL_OPER_COLUMNS[i]: {
+                    "column": oper_cols[i] or "",
+                    "key": oper_keys[i] or ""
+                } for i in range(nb_oper)
+            },
+            "icing": {
+                OPTIONAL_ICING_COLUMNS[i]: {
+                    "column": icing_cols[i] or "",
+                    "key": icing_keys[i] or ""
+                } for i in range(nb_icing)
+            }
+        },
+        # "turbine_info": {
+        #     "name": turbine_name or "",
+        #     "rated_power_kW": rated_power if rated_power is not None else "",
+        #     "hub_height_m": hub_height if hub_height is not None else "",
+        #     "elevation_m": elevation if elevation is not None else ""
+        # },
+        "power_curve_options": {
+            "temperature_threshold_C": temp_thresh if temp_thresh is not None else "",
+            "output_path": output_path or "",
+            "lower_limit_percent": lower_lim if lower_lim is not None else "",
+            "upper_limit_percent": upper_lim if upper_lim is not None else "",
+            "binning": {
+                "min": bin_min,
+                "max": bin_max,
+                "step": bin_step
+            }
+        }
+    }
+
+    # Génération du JSON
+    json_str = json.dumps(config, indent=4)
+
+    return dict(content=json_str, filename="settings_" + filename[0] + ".json", type="application/json")
+
+# Download the json file and set the parameters
+@callback(
+    [
+        *[Output({'type': 'column-mapper', 'index': col}, 'value') for col in REQUIRED_COLUMNS],
+
+        Output('unit-wind-speed', 'value'),
+        Output('unit-power', 'value'),
+        Output('unit-temperature', 'value'),
+
+        Output('column-mapper-met-Wind direction', 'value'),
+        Output('unit-wind-direction', 'value'),
+        Output('column-mapper-met-Pressure', 'value'),
+        Output('unit-pressure', 'value'),
+
+        *[Output(f'column-mapper-oper-{col}', 'value') for col in OPTIONAL_OPER_COLUMNS],
+        *[Output(f'column-mapper-icing-{col}', 'value') for col in OPTIONAL_ICING_COLUMNS],
+
+        Output('temperature-threshold', 'value'),
+        Output('output-path', 'value'),
+        Output('lower-limit', 'value'),
+        Output('upper-limit', 'value'),
+        Output('binning-min', 'value'),
+        Output('binning-max', 'value'),
+        Output('binning-step', 'value'),
+
+        Output('intermediate-json-config', 'data'),
+    ],
+    Input('settings-upload', 'contents'),
+    prevent_initial_call=True
+)
+def load_static_settings(contents):
+    if not contents:
+        return no_update
+    
+    content_type, content_string = contents.split(',')
+    decoded = base64.b64decode(content_string)
+    config_json_str = decoded.decode('utf-8')
+    config = json.loads(config_json_str)
+
+    get_col = lambda key: config.get("columns", {}).get(key, "")
+    get_param = lambda key: config.get("parameters", {}).get(key, "")
+
+    required_values = [get_col(col) for col in REQUIRED_COLUMNS]
+    param_values = [
+        get_param("unit_wind_speed"),
+        get_param("unit_power"),
+        get_param("unit_temperature"),
+    ]
+
+    meteo = config.get("optional_columns", {}).get("meteorological", {})
+    meteo_values = [
+        meteo.get("Wind direction", {}).get("column", ""),
+        meteo.get("Wind direction", {}).get("unit", ""),
+        meteo.get("Pressure", {}).get("column", ""),
+        meteo.get("Pressure", {}).get("unit", ""),
+    ]
+
+    operation = config.get("optional_columns", {}).get("operation", {})
+    icing = config.get("optional_columns", {}).get("icing", {})
+
+    oper_col_values = [operation.get(col, {}).get("column", "") for col in OPTIONAL_OPER_COLUMNS]
+    icing_col_values = [icing.get(col, {}).get("column", "") for col in OPTIONAL_ICING_COLUMNS]
+
+    turb_info = config.get("turbine_info", {})
+    # turbine_values = [
+    #     turb_info.get("name", ""),
+    #     turb_info.get("rated_power_kW", ""),
+    #     turb_info.get("hub_height_m", ""),
+    #     turb_info.get("elevation_m", ""),
+    # ]
+
+    curve_info = config.get("power_curve_options", {})
+    binning = curve_info.get("binning", {})
+    curve_values = [
+        curve_info.get("temperature_threshold_C", ""),
+        curve_info.get("output_path", ""),
+        curve_info.get("lower_limit_percent", ""),
+        curve_info.get("upper_limit_percent", ""),
+        binning.get("min", ""),
+        binning.get("max", ""),
+        binning.get("step", ""),
+    ]
+
+    return (
+        required_values +
+        param_values +
+        meteo_values +
+        oper_col_values +
+        icing_col_values +
+        # turbine_values +
+        curve_values +
+        [config_json_str]  
+    )
+
+@callback(
+    Output('normal-operation-key', 'value'),
+    *[Output(f'column-key-oper-{col}', 'value') for col in OPTIONAL_OPER_COLUMNS],
+    *[Output(f'column-key-icing-{col}', 'value') for col in OPTIONAL_ICING_COLUMNS],
+    Input('intermediate-json-config', 'data'),
+    prevent_initial_call=True
+)
+def set_keys_from_stored_json(config_json_str):
+    if not config_json_str:
+        raise dash.exceptions.PreventUpdate
+    sleep(1)
+    config = json.loads(config_json_str)
+
+    normal_key = config.get("parameters", {}).get("normal_operation_key", "")
+
+    operation = config.get("optional_columns", {}).get("operation", {})
+    icing = config.get("optional_columns", {}).get("icing", {})
+
+    oper_keys = [operation.get(col, {}).get("key", "") for col in OPTIONAL_OPER_COLUMNS]
+    icing_keys = [icing.get(col, {}).get("key", "") for col in OPTIONAL_ICING_COLUMNS]
+
+    return [normal_key] + oper_keys + icing_keys
+
+
+@callback(
+    Output("farm-csv-editable-table", "data"),
+    Input("farm-csv-upload", "contents"),
+    prevent_initial_call=True,
+)
+def refill_farm_table_from_csv(contents):
+    if contents is None:
+        return []
+
+    content_type, content_string = contents.split(",")
+
+    decoded = base64.b64decode(content_string)
+
+    df = pd.read_csv(StringIO(decoded.decode("utf-8")))
+
+    return df.to_dict("records")
+
+
+# Update the Ice detection key option
+@callback(
+    [
+        Output('selected-turbine', 'options'),
+        Output('selected-turbine', 'value'),
+    ],
+    Input('selected-filename', 'value'),
+    [
+        State('upload-data', 'contents'),
+        State('upload-data', 'filename'),
+    ],
+)
+def update_ice_detection_key_options(selected_file_name, file_contents, file_names):
+    selected_file_content = file_contents[file_names.index(selected_file_name)]
+    df = parse_contents_into_df(selected_file_content, selected_file_name)
+    try:
+        unique_turbine_IDs = df['ID'].unique()
+    except:
+        unique_turbine_IDs = []
+    return [{'label': id, 'value': id} for id in unique_turbine_IDs], unique_turbine_IDs[0] if len(unique_turbine_IDs) > 0 else None
+
+
+
+@callback(
+    Output("farm-data-download", "data"),
+    Input("download-farm-info-btn", "n_clicks"),
+    State("farm-csv-editable-table", "data"),
+    prevent_initial_call=True,
+)
+def download_farm_information(n_clicks, table_data):
+    if not table_data or not n_clicks:
+        return None
+    
+    if n_clicks:
+        df = pd.DataFrame(table_data)
+
+        return dcc.send_data_frame(
+            df.to_csv,
+            filename="farm_information.csv",
+            index=False,
+        )
+
+
+
+if __name__ == '__main__':
+    app.run(debug=True, port=8051)  

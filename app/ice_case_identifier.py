@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-DATA_DIR = Path(__file__).resolve().parent / 'app' / 'data'
+DATA_DIR = Path(__file__).resolve().parent / 'data'
 #DATA_DIR = Path(__file__).resolve().parent / 'data'
 
 class IceLossDetector(pd.DataFrame):
@@ -74,7 +74,13 @@ class IceLossDetector(pd.DataFrame):
         
         """
         #TODO: optionnal json file for column matching
-        full_data = pd.read_csv(fileName,index_col=0)
+        #full_data = pd.read_csv(fileName,index_col=0)
+        full_data = pd.read_csv(fileName)
+        if 'timestamp' in full_data.columns:
+            full_data.set_index('timestamp',inplace=True)
+        else:
+            ImportError('The time column should be labeled timestamp')
+        
         ice_det = cls.constructFromDataFrame(full_data)
         return ice_det
     
@@ -851,7 +857,7 @@ class IceLossDetector(pd.DataFrame):
         
         #Handle 2 cases, 1- A single csv with all the turbine and a ID column, 2- A csv file per turbine
         if (len(windFarmDF.file_name.unique()) == 1) & (len(windFarmDF)!=1):
-            fullDF = IceLossDetector.importFromCSV(Path('app') / 'data' / windFarmDF.file_name[0])
+            fullDF = IceLossDetector.importFromCSV( 'data' / windFarmDF.file_name[0])
             if 'ID' not in fullDF.columns:
                 raise ImportError('Single data csv file in import list, the file does not include the ID column necessary for multiple turbines')
             uniqueTurbines = fullDF.ID.unique()
